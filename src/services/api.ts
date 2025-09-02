@@ -41,6 +41,11 @@ class ApiService {
     this.token = localStorage.getItem('authToken');
   }
 
+  setAuthToken(token: string) {
+    this.token = token;
+    localStorage.setItem('authToken', token);
+  }
+
   private async request<T>(
     endpoint: string,
     options: RequestInit = {}
@@ -175,9 +180,10 @@ class ApiService {
   }
 
   logout() {
-    console.log('API: Logging out - clearing token');
+    console.log('API: Logging out - clearing token and user data');
     this.token = null;
     localStorage.removeItem('authToken');
+    localStorage.removeItem('user');
   }
 }
 

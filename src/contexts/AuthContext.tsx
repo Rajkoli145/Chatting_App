@@ -29,29 +29,38 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('Checking auth on startup, token:', token ? 'exists' : 'not found');
       console.log('Stored user data:', storedUser);
       
-      if (token) {
+      if (token && storedUser) {
         try {
-          // Try to use stored user data first, then fetch from API if needed
-          if (storedUser) {
-            const userData = JSON.parse(storedUser);
-            console.log('Using stored user data:', userData);
-            setUser(userData);
-          }
-          
-          // Still fetch fresh data from API
-          const userData = await apiService.getCurrentUser();
-          console.log('Fresh user data retrieved:', userData);
+          // Use stored user data immediately to prevent logout on refresh
+          const userData = JSON.parse(storedUser);
+          console.log('Restoring user from localStorage:', userData);
           setUser(userData);
-          localStorage.setItem('user', JSON.stringify(userData));
+          
+          // Set the token in apiService for authenticated requests
+          apiService.setAuthToken(token);
           
           // Connect to socket
           socketService.connect(token);
           console.log('Socket connected on startup');
+          
+          // Optionally fetch fresh data in background (don't await)
+          apiService.getCurrentUser()
+            .then(freshData => {
+              console.log('Fresh user data retrieved:', freshData);
+              setUser(freshData);
+              localStorage.setItem('user', JSON.stringify(freshData));
+            })
+            .catch(error => {
+              console.error('Background user fetch failed:', error);
+              // Don't logout on background fetch failure
+            });
+            
         } catch (error) {
-          console.error('Auth check failed:', error);
-          // Token is invalid, remove it
+          console.error('Auth restoration failed:', error);
+          // Only clear auth if parsing fails or token is truly invalid
           localStorage.removeItem('authToken');
           localStorage.removeItem('user');
+          setUser(null);
         }
       }
       setIsLoading(false);
