@@ -12,6 +12,7 @@ class SocketIOAdapter extends IoAdapter {
         origin: [
           'http://localhost:8080',
           'http://localhost:8081', 
+          'http://localhost:8082',
           'http://192.168.0.102:8080',
           process.env.FRONTEND_URL || 'http://localhost:8081'
         ],
@@ -34,6 +35,7 @@ async function bootstrap() {
     origin: [
       'http://localhost:8080',
       'http://localhost:8081', 
+      'http://localhost:8082',
       'http://192.168.0.102:8080',
       'http://127.0.0.1:8080',
       process.env.FRONTEND_URL || 'http://localhost:8081'

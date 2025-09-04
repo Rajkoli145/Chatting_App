@@ -51,8 +51,10 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
   const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
-    loadConversations();
-  }, []);
+    if (user?._id || user?.id) {
+      loadConversations();
+    }
+  }, [user]);
 
   const loadConversations = async () => {
     try {

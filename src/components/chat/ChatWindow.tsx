@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useParams, useNavigate } from 'react-router-dom';
-import { Send, Globe, Eye, EyeOff, MoreVertical, Phone, Video, Settings, ArrowLeft, Languages } from 'lucide-react';
+import { Send, Globe, Eye, EyeOff, MoreVertical, Phone, Video, Settings, ArrowLeft, Languages, Trash2, MessageSquareX } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
@@ -65,16 +65,17 @@ export default function ChatWindow() {
     
     try {
       const data = await apiService.getMessages(conversationId);
-      setMessages(data.messages);
+      setMessages(data.messages || []);
       
       // Set target language and receiverId based on other user's preference
-      if (data.messages.length > 0) {
+      if (data.messages && data.messages.length > 0) {
         const firstMessage = data.messages[0];
         const otherUserId = firstMessage.senderId === user?.id ? firstMessage.receiverId : firstMessage.senderId;
         setReceiverId(otherUserId);
         setTargetLang(data.messages[0].targetLang || 'en');
       }
     } catch (error) {
+      console.error('Error loading messages:', error);
       toast({
         title: 'Error',
         description: 'Failed to load messages',
@@ -131,6 +132,41 @@ export default function ChatWindow() {
             : msg
         )
       );
+    });
+
+    // Handle message deletion
+    socketService.onMessageDeleted((data) => {
+      if (data.conversationId === conversationId) {
+        setMessages(prev => prev.filter(msg => msg.id !== data.messageId));
+      }
+    });
+
+    // Handle conversation clearing
+    socketService.onConversationCleared((data) => {
+      if (data.conversationId === conversationId) {
+        setMessages([]);
+        toast({
+          title: 'Conversation cleared',
+          description: 'All messages have been removed from this conversation.',
+        });
+      }
+    });
+
+    // Handle delete/clear errors
+    socketService.onDeleteMessageError((data) => {
+      toast({
+        title: 'Error',
+        description: data.error,
+        variant: 'destructive',
+      });
+    });
+
+    socketService.onClearConversationError((data) => {
+      toast({
+        title: 'Error',
+        description: data.error,
+        variant: 'destructive',
+      });
     });
   };
 
@@ -199,6 +235,18 @@ export default function ChatWindow() {
     return lang?.native || code;
   };
 
+  const handleDeleteMessage = (messageId: string) => {
+    if (!conversationId) return;
+    socketService.deleteMessage(messageId, conversationId);
+  };
+
+  const handleClearConversation = () => {
+    if (!conversationId) return;
+    if (window.confirm('Are you sure you want to clear all messages in this conversation? This action cannot be undone.')) {
+      socketService.clearConversation(conversationId);
+    }
+  };
+
   if (!user) {
     return null;
   }
@@ -256,6 +304,13 @@ export default function ChatWindow() {
                 <Settings className="h-4 w-4 mr-2" />
                 Chat Settings
               </DropdownMenuItem>
+              <DropdownMenuItem 
+                onClick={handleClearConversation}
+                className="text-destructive focus:text-destructive"
+              >
+                <MessageSquareX className="h-4 w-4 mr-2" />
+                Clear Conversation
+              </DropdownMenuItem>
             </DropdownMenuContent>
           </DropdownMenu>
         </div>
@@ -308,56 +363,123 @@ export default function ChatWindow() {
         {messages.map((message) => (
           <div
             key={message.id}
-            className={`flex ${message.senderId === user.id ? 'justify-end' : 'justify-start'}`}
+            className={`flex ${message.senderId === (user._id || user.id) ? 'justify-end' : 'justify-start'}`}
           >
-            <div className={`max-w-xs lg:max-w-md ${message.senderId === user.id ? 'order-2' : 'order-1'}`}>
-              <div
-                className={`rounded-2xl px-4 py-3 shadow-elegant ${
-                  message.senderId === user.id
-                    ? 'bg-chat-bubble-sent text-chat-bubble-sent-foreground ml-4'
-                    : 'bg-chat-bubble-received text-chat-bubble-received-foreground mr-4'
-                }`}
-              >
-                <div className="space-y-2">
-                  <p className="text-sm leading-relaxed">
-                    {showOriginal[message.id] 
-                      ? message.originalText 
-                      : (message.translatedText || message.originalText)
-                    }
-                  </p>
-                  
-                  {message.translatedText && message.translatedText !== message.originalText && (
-                    <div className="flex items-center justify-between text-xs opacity-70">
-                      <div className="flex items-center space-x-1">
-                        <Globe className="h-3 w-3" />
-                        <span>
+            <div className={`max-w-xs lg:max-w-md ${message.senderId === (user._id || user.id) ? 'order-2' : 'order-1'} relative`}>
+              {/* Right-click context menu for own messages only */}
+              {message.senderId === (user._id || user.id) ? (
+                <DropdownMenu>
+                  <DropdownMenuTrigger asChild>
+                    <div
+                      className={`rounded-2xl px-4 py-3 shadow-elegant cursor-pointer ${
+                        message.senderId === (user._id || user.id)
+                          ? 'bg-chat-bubble-sent text-chat-bubble-sent-foreground ml-4'
+                          : 'bg-chat-bubble-received text-chat-bubble-received-foreground mr-4'
+                      }`}
+                      onContextMenu={(e) => {
+                        e.preventDefault();
+                        e.currentTarget.click();
+                      }}
+                    >
+                      <div className="space-y-2">
+                        <p className="text-sm leading-relaxed">
                           {showOriginal[message.id] 
-                            ? `Original (${getLanguageName(message.sourceLang)})`
-                            : `Translated from ${getLanguageName(message.sourceLang)}`
+                            ? message.originalText 
+                            : (message.translatedText || message.originalText)
                           }
-                        </span>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-auto p-0 text-xs opacity-70 hover:opacity-100"
-                        onClick={() => toggleOriginal(message.id)}
-                      >
-                        {showOriginal[message.id] ? (
-                          <><EyeOff className="h-3 w-3 mr-1" />Hide</>
-                        ) : (
-                          <><Eye className="h-3 w-3 mr-1" />Original</>
+                        </p>
+                        
+                        {message.translatedText && message.translatedText !== message.originalText && (
+                          <div className="flex items-center justify-between text-xs opacity-70">
+                            <div className="flex items-center space-x-1">
+                              <Globe className="h-3 w-3" />
+                              <span>
+                                {showOriginal[message.id] 
+                                  ? `Original (${getLanguageName(message.sourceLang)})`
+                                  : `Translated from ${getLanguageName(message.sourceLang)}`
+                                }
+                              </span>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              className="h-auto p-0 text-xs opacity-70 hover:opacity-100"
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                toggleOriginal(message.id);
+                              }}
+                            >
+                              {showOriginal[message.id] ? (
+                                <><EyeOff className="h-3 w-3 mr-1" />Hide</>
+                              ) : (
+                                <><Eye className="h-3 w-3 mr-1" />Original</>
+                              )}
+                            </Button>
+                          </div>
                         )}
-                      </Button>
+                      </div>
                     </div>
-                  )}
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end">
+                    <DropdownMenuItem 
+                      onClick={() => handleDeleteMessage(message.id)}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="h-4 w-4 mr-2" />
+                      Delete Message
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              ) : (
+                <div
+                  className={`rounded-2xl px-4 py-3 shadow-elegant ${
+                    message.senderId === (user._id || user.id)
+                      ? 'bg-chat-bubble-sent text-chat-bubble-sent-foreground ml-4'
+                      : 'bg-chat-bubble-received text-chat-bubble-received-foreground mr-4'
+                  }`}
+                >
+                  <div className="space-y-2">
+                    <p className="text-sm leading-relaxed">
+                      {showOriginal[message.id] 
+                        ? message.originalText 
+                        : (message.translatedText || message.originalText)
+                      }
+                    </p>
+                    
+                    {message.translatedText && message.translatedText !== message.originalText && (
+                      <div className="flex items-center justify-between text-xs opacity-70">
+                        <div className="flex items-center space-x-1">
+                          <Globe className="h-3 w-3" />
+                          <span>
+                            {showOriginal[message.id] 
+                              ? `Original (${getLanguageName(message.sourceLang)})`
+                              : `Translated from ${getLanguageName(message.sourceLang)}`
+                            }
+                          </span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-auto p-0 text-xs opacity-70 hover:opacity-100"
+                          onClick={() => toggleOriginal(message.id)}
+                        >
+                          {showOriginal[message.id] ? (
+                            <><EyeOff className="h-3 w-3 mr-1" />Hide</>
+                          ) : (
+                            <><Eye className="h-3 w-3 mr-1" />Original</>
+                          )}
+                        </Button>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
+              )}
+              
               <div className={`text-xs text-muted-foreground mt-1 ${
-                message.senderId === user.id ? 'text-right' : 'text-left'
+                message.senderId === (user._id || user.id) ? 'text-right' : 'text-left'
               }`}>
                 {formatTime(message.createdAt)}
-                {message.senderId === user.id && (
+                {message.senderId === (user._id || user.id) && (
                   <span className="ml-2">
                     {message.status === 'sent' && '✓'}
                     {message.status === 'delivered' && '✓✓'}

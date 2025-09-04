@@ -148,6 +148,44 @@ class SocketService {
     }
   }
 
+  // Delete message
+  deleteMessage(messageId: string, conversationId: string) {
+    if (this.socket) {
+      this.socket.emit('deleteMessage', { messageId, conversationId });
+    }
+  }
+
+  onMessageDeleted(callback: (data: { messageId: string; conversationId: string }) => void) {
+    if (this.socket) {
+      this.socket.on('messageDeleted', callback);
+    }
+  }
+
+  onDeleteMessageError(callback: (data: { error: string }) => void) {
+    if (this.socket) {
+      this.socket.on('deleteMessageError', callback);
+    }
+  }
+
+  // Clear conversation
+  clearConversation(conversationId: string) {
+    if (this.socket) {
+      this.socket.emit('clearConversation', { conversationId });
+    }
+  }
+
+  onConversationCleared(callback: (data: { conversationId: string; clearedBy: string }) => void) {
+    if (this.socket) {
+      this.socket.on('conversationCleared', callback);
+    }
+  }
+
+  onClearConversationError(callback: (data: { error: string }) => void) {
+    if (this.socket) {
+      this.socket.on('clearConversationError', callback);
+    }
+  }
+
   isConnected(): boolean {
     return this.socket?.connected ?? false;
   }

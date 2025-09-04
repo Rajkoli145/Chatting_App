@@ -1,6 +1,6 @@
 import { io, Socket } from 'socket.io-client';
 
-const CHAT_SERVER_URL = 'http://localhost:5001';
+const CHAT_SERVER_URL = 'http://localhost:5001/chat';
 
 interface Message {
   id: string;
@@ -34,12 +34,13 @@ class ChatService {
     });
 
     this.socket.on('connect', () => {
-      console.log('✅ Connected to chat server');
+      console.log('✅ Connected to chat server with socket ID:', this.socket?.id);
       
       // Notify server that user is online
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (currentUser.id) {
-        this.socket?.emit('userOnline', { userId: currentUser.id });
+      if (currentUser._id || currentUser.id) {
+        console.log('📡 Emitting userOnline for user:', currentUser._id || currentUser.id);
+        this.socket?.emit('userOnline', { userId: currentUser._id || currentUser.id });
       }
     });
 
@@ -48,8 +49,8 @@ class ChatService {
       
       // Notify server that user is offline
       const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-      if (currentUser.id) {
-        this.socket?.emit('userOffline', { userId: currentUser.id });
+      if (currentUser._id || currentUser.id) {
+        this.socket?.emit('userOffline', { userId: currentUser._id || currentUser.id });
       }
     });
 
@@ -75,8 +76,11 @@ class ChatService {
 
   joinConversation(conversationId: string) {
     if (this.socket) {
+      console.log(`💬 Attempting to join conversation: ${conversationId} with socket: ${this.socket.id}`);
       this.socket.emit('joinConversation', { conversationId });
       console.log(`💬 Joined conversation: ${conversationId}`);
+    } else {
+      console.error('❌ Cannot join conversation - no socket connection');
     }
   }
 

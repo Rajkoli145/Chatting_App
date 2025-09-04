@@ -1,0 +1,64 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Clear Chat Cache</title>
+</head>
+<body>
+    <h1>Clearing Chat Cache...</h1>
+    <p id="status">Processing...</p>
+    
+    <script>
+        // Clear all localStorage data
+        localStorage.clear();
+        
+        // Clear sessionStorage as well
+        sessionStorage.clear();
+        
+        // Clear IndexedDB if used
+        if ('indexedDB' in window) {
+            indexedDB.databases().then(databases => {
+                databases.forEach(db => {
+                    indexedDB.deleteDatabase(db.name);
+                });
+            });
+        }
+        
+        // Force clear specific chat-related keys that might persist
+        const keysToRemove = [
+            'messages', 'conversations', 'currentUser', 'authToken', 
+            'chatHistory', 'selectedConversation', 'userPreferences'
+        ];
+        
+        keysToRemove.forEach(key => {
+            localStorage.removeItem(key);
+            sessionStorage.removeItem(key);
+        });
+        
+        // Clear cookies related to the chat app
+        document.cookie.split(";").forEach(function(c) { 
+            document.cookie = c.replace(/^ +/, "").replace(/=.*/, "=;expires=" + new Date().toUTCString() + ";path=/"); 
+        });
+        
+        document.getElementById('status').innerHTML = `
+            <p style="color: green;">✅ Cache cleared successfully!</p>
+            <p>The following data has been cleared:</p>
+            <ul>
+                <li>localStorage (all keys including messages, conversations)</li>
+                <li>sessionStorage (all data)</li>
+                <li>IndexedDB databases</li>
+                <li>All cookies</li>
+                <li>Specific chat-related storage keys</li>
+            </ul>
+            <p><strong>Now close this tab and hard refresh your chat app (Ctrl+Shift+R or Cmd+Shift+R)</strong></p>
+            <button onclick="window.close()" style="padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer;">Close This Tab</button>
+        `;
+        
+        console.log('All browser cache and storage cleared aggressively');
+        
+        // Auto-close after 3 seconds
+        setTimeout(() => {
+            window.close();
+        }, 3000);
+    </script>
+</body>
+</html>

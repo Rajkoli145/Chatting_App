@@ -13,7 +13,8 @@ if (!API_BASE_URL) {
 }
 
 interface User {
-  id: string;
+  id?: string;
+  _id?: string;
   mobile: string;
   name: string;
   preferredLanguage: string;
@@ -193,15 +194,15 @@ class ApiService {
 
   // Chat endpoints
   async getConversations() {
-    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-    const userId = currentUser.id;
+    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+    const userId = currentUser._id || currentUser.id;
     console.log('API: Getting conversations for user:', userId);
     return this.request<Conversation[]>(`/conversations?userId=${userId}`);
   }
 
   async getMessages(conversationId: string, cursor?: string) {
-    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-    const userId = currentUser.id;
+    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+    const userId = currentUser._id || currentUser.id;
     console.log('API: Getting messages for conversation:', conversationId, 'user:', userId);
     const query = cursor ? `?cursor=${cursor}&userId=${userId}` : `?userId=${userId}`;
     return this.request<{ messages: Message[]; hasMore: boolean }>(`/conversations/${conversationId}/messages${query}`);
@@ -212,8 +213,8 @@ class ApiService {
     sourceLang: string;
     receiverId: string;
   }) {
-    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
-    const senderId = currentUser.id;
+    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
+    const senderId = currentUser._id || currentUser.id;
     
     console.log('API: Sending message to conversation:', conversationId, 'from:', senderId, 'to:', messageData.receiverId);
     return this.request(`/conversations/${conversationId}/messages`, {

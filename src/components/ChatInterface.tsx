@@ -66,23 +66,39 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
       console.log('💬 Connecting to chat WebSocket...');
       chatService.connect(token);
       
-      // Set up message listeners
+      // Set up WebSocket listeners
       chatService.onNewMessage((message) => {
         console.log('📨 Received new message:', message);
+        console.log('📨 Current user ID:', user?._id || user?.id);
+        console.log('📨 Message sender ID:', message.senderId);
+        console.log('📨 Selected conversation ID:', selectedConversationId);
+        console.log('📨 Message conversation ID:', message.conversationId);
+        
         const newMessage = {
           ...message,
           createdAt: new Date(message.timestamp),
           timestamp: new Date(message.timestamp),
-          isOwn: message.senderId === user.id
+          isOwn: message.senderId === (user?._id || user?.id)
         };
         
         setMessages(prev => {
-          const updatedMessages = [...prev, newMessage];
-          // Update cache when new message arrives
-          if (message.conversationId) {
-            localStorage.setItem(`messages_${message.conversationId}`, JSON.stringify(updatedMessages));
+          // Check if message already exists to prevent duplicates
+          const messageExists = prev.some(msg => msg.id === message.id);
+          if (messageExists) {
+            console.log('📨 Message already exists, skipping:', message.id);
+            return prev;
           }
-          return updatedMessages;
+          
+          // Only add message if it belongs to the current conversation
+          if (message.conversationId !== selectedConversationId) {
+            console.log('📨 Message not for current conversation, skipping');
+            console.log('📨 Message conversation ID:', message.conversationId);
+            console.log('📨 Selected conversation ID:', selectedConversationId);
+            return prev;
+          }
+          
+          console.log('📨 Adding new message to UI:', newMessage);
+          return [...prev, newMessage];
         });
       });
 
@@ -115,36 +131,29 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
     }
   }, [user]);
 
-  // Join conversation when selected and load/restore messages
+  // Join conversation when selected and load messages
   useEffect(() => {
-    if (selectedConversationId) {
+    console.log('🔄 Effect triggered - selectedConversationId:', selectedConversationId, 'user:', user?.id);
+    
+    if (selectedConversationId && user) {
       console.log('🏠 Joining conversation:', selectedConversationId);
       chatService.joinConversation(selectedConversationId);
       
-      // Try to restore messages from localStorage first
-      const cachedMessages = localStorage.getItem(`messages_${selectedConversationId}`);
-      if (cachedMessages && !messagesLoaded) {
-        try {
-          const parsedMessages = JSON.parse(cachedMessages);
-          console.log('📦 Restoring cached messages:', parsedMessages.length);
-          setMessages(parsedMessages.map((msg: any) => ({
-            ...msg,
-            createdAt: new Date(msg.createdAt),
-            timestamp: new Date(msg.timestamp),
-            isOwn: msg.senderId === user?.id
-          })));
-        } catch (error) {
-          console.error('Failed to parse cached messages:', error);
-        }
-      }
-      
-      // Load fresh messages from API
+      // Load messages from API only
+      console.log('📥 Loading messages from API');
       loadMessages();
+      
       setMessagesLoaded(true);
+    } else if (selectedConversationId) {
+      // Don't clear messages if we have a conversation but user is still loading
+      console.log('⏳ Waiting for user data...');
     } else {
+      // Clear messages when no conversation is selected
+      console.log('🧹 Clearing messages - no conversation selected');
+      setMessages([]);
       setMessagesLoaded(false);
     }
-  }, [selectedConversationId, user?.id]);
+  }, [selectedConversationId, user]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -161,16 +170,19 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
         ...msg,
         createdAt: new Date(msg.createdAt),
         timestamp: new Date(msg.createdAt),
-        isOwn: msg.senderId === user?.id
+        isOwn: msg.senderId === (user?._id || user?.id)
       }));
       
+      console.log('💾 Loading messages from API for conversation:', selectedConversationId, formattedMessages.length);
       setMessages(formattedMessages);
-      
-      // Cache messages in localStorage for persistence
-      localStorage.setItem(`messages_${selectedConversationId}`, JSON.stringify(formattedMessages));
-      console.log('💾 Cached messages for conversation:', selectedConversationId);
     } catch (error) {
       console.error('Failed to load messages:', error);
+      // If conversation doesn't exist, clear the selected conversation
+      if (error.message?.includes('404') || error.message?.includes('500')) {
+        console.log('🚫 Conversation not found, clearing selection');
+        setMessages([]);
+        // You might want to navigate back to conversation list or show an error
+      }
     }
   };
 
@@ -183,96 +195,56 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
     const tempMessage: Message = {
       id: `temp-${Date.now()}`,
       conversationId: selectedConversationId,
-      senderId: user?.id || 'current-user',
+      senderId: user?._id || user?.id || '',
       receiverId: receiverId,
       originalText: newMessage,
-      translatedText: undefined,
+      translatedText: '',
       sourceLang: user?.preferredLanguage || 'en',
-      targetLang: undefined,
-      status: 'sending',
+      targetLang: selectedConversation.user.preferredLanguage,
       createdAt: new Date(),
       timestamp: new Date(),
-      isOwn: true,
+      status: 'sending',
+      isOwn: true
     };
 
-    // Add temp message immediately for UI feedback
-    setMessages(prev => [...prev, tempMessage]);
+    // Add message immediately to UI
+    const updatedMessages = [...messages, tempMessage];
+    setMessages(updatedMessages);
+    
     setNewMessage('');
 
     try {
-      console.log('📤 Attempting to send message via API first...');
-      
-      // Try API first
-      const apiResponse = await apiService.sendMessage(selectedConversationId, {
+      // Send via WebSocket for real-time delivery
+      chatService.sendMessage({
+        conversationId: selectedConversationId,
+        originalText: newMessage,
+        sourceLang: user?.preferredLanguage || 'en',
+        targetLang: selectedConversation.user.preferredLanguage,
+        receiverId: receiverId
+      });
+
+      // Also send via API for persistence
+      await apiService.sendMessage(selectedConversationId, {
         originalText: newMessage,
         sourceLang: user?.preferredLanguage || 'en',
         receiverId: receiverId
       });
+
+      console.log('✅ Message sent successfully');
       
-      console.log('✅ Message sent via API:', apiResponse);
+      // Update message status to sent
+      const sentMessages = updatedMessages.map(msg => 
+        msg.id === tempMessage.id ? { ...msg, status: 'sent' as const } : msg
+      );
+      setMessages(sentMessages);
       
-      // Update temp message with real data
-      setMessages(prev => {
-        const updatedMessages = prev.map(msg => 
-          msg.id === tempMessage.id 
-            ? { 
-                ...msg,
-                id: (apiResponse as any).id,
-                status: 'sent' as const,
-                createdAt: new Date((apiResponse as any).createdAt),
-                timestamp: new Date((apiResponse as any).createdAt)
-              }
-            : msg
-        );
-        
-        // Update cache when message is sent
-        localStorage.setItem(`messages_${selectedConversationId}`, JSON.stringify(updatedMessages));
-        return updatedMessages;
-      });
-      
-    } catch (apiError) {
-      console.error('❌ API send failed, trying WebSocket fallback:', apiError);
-      
-      // Fallback to WebSocket
-      try {
-        chatService.sendMessage({
-          conversationId: selectedConversationId,
-          originalText: newMessage,
-          sourceLang: user?.preferredLanguage || 'en',
-          targetLang: 'auto',
-          receiverId: receiverId
-        });
-        
-        console.log('✅ Message sent via WebSocket');
-        
-        // Update temp message status
-        setMessages(prev => {
-          const updatedMessages = prev.map(msg => 
-            msg.id === tempMessage.id 
-              ? { ...msg, status: 'sent' as const }
-              : msg
-          );
-          // Update cache
-          localStorage.setItem(`messages_${selectedConversationId}`, JSON.stringify(updatedMessages));
-          return updatedMessages;
-        });
-        
-      } catch (wsError) {
-        console.error('❌ WebSocket send also failed:', wsError);
-        
-        // Update temp message to show error
-        setMessages(prev => prev.map(msg => 
-          msg.id === tempMessage.id 
-            ? { ...msg, status: 'failed' }
-            : msg
-        ));
-        
-        toast({
-          title: 'Message Failed',
-          description: 'Failed to send message. Please try again.',
-          variant: 'destructive',
-        });
-      }
+    } catch (error) {
+      console.error('❌ Failed to send message:', error);
+      // Update message status to failed
+      const failedMessages = updatedMessages.map(msg => 
+        msg.id === tempMessage.id ? { ...msg, status: 'failed' as const } : msg
+      );
+      setMessages(failedMessages);
     }
   };
 
@@ -384,64 +356,47 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
 
         {/* Messages */}
         <div className="flex-1 overflow-y-auto p-4 space-y-4">
-          {messages.map((message) => (
-          <div
-            key={message.id}
-            className={`flex ${message.isOwn ? 'justify-end' : 'justify-start'}`}
-          >
-            <div className={`max-w-xs lg:max-w-md ${message.isOwn ? 'order-2' : 'order-1'}`}>
+          <div className="text-xs text-gray-500 mb-2">
+            Debug: Messages count: {messages.length} | Selected conversation: {selectedConversationId}
+          </div>
+          {messages.length === 0 && (
+            <div className="flex items-center justify-center h-full text-muted-foreground">
+              <p>No messages yet. Start the conversation!</p>
+            </div>
+          )}
+          {messages.map((message, index) => {
+            console.log(`🎨 Rendering message ${index}:`, message);
+            return (
               <div
-                className={`rounded-2xl px-4 py-3 shadow-elegant ${
-                  message.isOwn
-                    ? 'bg-chat-bubble-sent text-chat-bubble-sent-foreground ml-4'
-                    : 'bg-chat-bubble-received text-chat-bubble-received-foreground mr-4'
-                }`}
+                key={message.id}
+                className={`flex ${message.isOwn ? 'justify-end' : 'justify-start'} mb-4`}
               >
-                <div className="space-y-2">
-                  <p className="text-sm leading-relaxed">
-                    {showOriginal[message.id] ? message.originalText : (message.translatedText || message.originalText)}
-                  </p>
-                  
-                  {message.translatedText && (
-                    <div className="flex items-center justify-between text-xs opacity-70">
-                      <div className="flex items-center space-x-1">
-                        <Globe className="h-3 w-3" />
-                        <span>
-                          {showOriginal[message.id] 
-                            ? `Original (${getLanguageName(message.sourceLang)})`
-                            : `Translated from ${getLanguageName(message.sourceLang)}`
-                          }
-                        </span>
-                      </div>
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="h-auto p-0 text-xs opacity-70 hover:opacity-100"
-                        onClick={() => toggleOriginal(message.id)}
-                      >
-                        {showOriginal[message.id] ? (
-                          <><EyeOff className="h-3 w-3 mr-1" />Hide</>
-                        ) : (
-                          <><Eye className="h-3 w-3 mr-1" />Original</>
-                        )}
-                      </Button>
-                    </div>
-                  )}
+                <div className={`max-w-xs lg:max-w-md`}>
+                  <div
+                    className={`rounded-2xl px-4 py-3 ${
+                      message.isOwn
+                        ? 'bg-purple-600 text-white'
+                        : 'bg-gray-200 text-gray-900'
+                    }`}
+                  >
+                    <p className="text-sm">
+                      {message.originalText || 'No text'}
+                    </p>
+                  </div>
+                  <div className={`text-xs text-gray-500 mt-1 ${message.isOwn ? 'text-right' : 'text-left'}`}>
+                    {message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : 'No time'}
+                    {message.isOwn && (
+                      <span className="ml-2">
+                        {message.status === 'sent' && '✓'}
+                        {message.status === 'delivered' && '✓✓'}
+                        {message.status === 'read' && '✓✓'}
+                      </span>
+                    )}
+                  </div>
                 </div>
               </div>
-              <div className={`text-xs text-muted-foreground mt-1 ${message.isOwn ? 'text-right' : 'text-left'}`}>
-                {formatTime(message.timestamp)}
-                {message.isOwn && (
-                  <span className="ml-2">
-                    {message.status === 'sent' && '✓'}
-                    {message.status === 'delivered' && '✓✓'}
-                    {message.status === 'read' && <span className="text-primary">✓✓</span>}
-                  </span>
-                )}
-              </div>
-            </div>
-          </div>
-        ))}
+            );
+          })}
         
         {typingUsers.size > 0 && (
           <div className="flex justify-start">

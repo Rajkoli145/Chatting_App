@@ -10,7 +10,7 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-import { MessagesService } from './messages.service';
+import { MessagesService } from '../messages/messages.service';
 
 @Injectable()
 @WebSocketGateway({
@@ -34,6 +34,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     try {
       const token = client.handshake.auth.token;
       if (!token) {
+        this.logger.error('No token provided for WebSocket connection');
         client.disconnect();
         return;
       }
@@ -44,7 +45,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       this.connectedUsers.set(userId, client.id);
       client.join(`user_${userId}`);
       
-      this.logger.log(`💬 User ${userId} connected to chat`);
+      this.logger.log(`💬 User ${userId} connected to chat with socket ${client.id}`);
+      this.logger.log(`💬 Connected users: ${Array.from(this.connectedUsers.keys()).join(', ')}`);
       
       // Store userId on the socket for easier access
       (client as any).userId = userId;
@@ -64,8 +66,13 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { conversationId: string },
   ) {
+    const userId = (client as any).userId;
     client.join(`conversation_${data.conversationId}`);
-    this.logger.log(`💬 Client joined conversation: ${data.conversationId}`);
+    this.logger.log(`💬 User ${userId} with socket ${client.id} joined conversation: ${data.conversationId}`);
+    
+    // Get all clients in this conversation room
+    const room = this.server.sockets.adapter.rooms.get(`conversation_${data.conversationId}`);
+    this.logger.log(`💬 Conversation ${data.conversationId} now has ${room?.size || 0} participants`);
   }
 
   @SubscribeMessage('leaveConversation')
@@ -132,14 +139,14 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const senderId = payload.sub;
 
       // Save message to database
-      const savedMessage = await this.messagesService.createMessage({
-        conversationId: data.conversationId,
+      const savedMessage = await this.messagesService.create(
+        data.conversationId,
         senderId,
-        receiverId: data.receiverId,
-        originalText: data.originalText,
-        sourceLang: data.sourceLang,
-        targetLang: data.targetLang,
-      });
+        data.receiverId,
+        data.originalText,
+        data.sourceLang,
+        data.targetLang,
+      );
 
       // Create message object for WebSocket emission
       const message = {
@@ -155,11 +162,15 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         status: savedMessage.status,
       };
 
-      // Emit to conversation room and directly to receiver
+      // Only broadcast to conversation room to avoid duplicates
       this.server.to(`conversation_${data.conversationId}`).emit('newMessage', message);
-      this.server.to(`user_${data.receiverId}`).emit('newMessage', message);
 
-      this.logger.log(`💬 Message saved and sent in conversation: ${data.conversationId} to receiver: ${data.receiverId}`);
+      this.logger.log(`💬 Message saved and broadcasted to conversation: ${data.conversationId}`);
+      this.logger.log(`💬 Message ID: ${message.id}`);
+      
+      // Log room participants for debugging
+      const conversationRoom = this.server.sockets.adapter.rooms.get(`conversation_${data.conversationId}`);
+      this.logger.log(`💬 Conversation room size: ${conversationRoom?.size || 0}`);
       
     } catch (error) {
       this.logger.error('Failed to send message:', error);
@@ -181,6 +192,64 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       userId,
       isTyping: data.isTyping,
     });
+  }
+
+  @SubscribeMessage('deleteMessage')
+  async handleDeleteMessage(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { messageId: string; conversationId: string },
+  ) {
+    try {
+      const token = client.handshake.auth.token;
+      const payload = this.jwtService.verify(token);
+      const userId = payload.sub;
+
+      const success = await this.messagesService.deleteMessage(data.messageId, userId);
+      
+      if (success) {
+        // Emit to conversation room that message was deleted
+        this.server.to(`conversation_${data.conversationId}`).emit('messageDeleted', {
+          messageId: data.messageId,
+          conversationId: data.conversationId,
+        });
+        
+        this.logger.log(`💬 Message ${data.messageId} deleted by user ${userId}`);
+      } else {
+        client.emit('deleteMessageError', { error: 'Failed to delete message' });
+      }
+    } catch (error) {
+      this.logger.error('Failed to delete message:', error);
+      client.emit('deleteMessageError', { error: 'Failed to delete message' });
+    }
+  }
+
+  @SubscribeMessage('clearConversation')
+  async handleClearConversation(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: { conversationId: string },
+  ) {
+    try {
+      const token = client.handshake.auth.token;
+      const payload = this.jwtService.verify(token);
+      const userId = payload.sub;
+
+      const success = await this.messagesService.clearConversation(data.conversationId, userId);
+      
+      if (success) {
+        // Emit to conversation room that conversation was cleared
+        this.server.to(`conversation_${data.conversationId}`).emit('conversationCleared', {
+          conversationId: data.conversationId,
+          clearedBy: userId,
+        });
+        
+        this.logger.log(`💬 Conversation ${data.conversationId} cleared by user ${userId}`);
+      } else {
+        client.emit('clearConversationError', { error: 'Failed to clear conversation' });
+      }
+    } catch (error) {
+      this.logger.error('Failed to clear conversation:', error);
+      client.emit('clearConversationError', { error: 'Failed to clear conversation' });
+    }
   }
 
   // Method to emit message status updates

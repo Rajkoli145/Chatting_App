@@ -147,4 +147,50 @@ export class MessagesService {
 
     return message;
   }
+
+  async deleteMessage(messageId: string, userId: string): Promise<boolean> {
+    console.log('🗑️ Attempting to delete message:', messageId, 'by user:', userId);
+    
+    const message = await this.messageModel.findById(messageId);
+    console.log('🗑️ Found message:', message ? 'Yes' : 'No');
+    
+    if (!message) {
+      console.log('🗑️ Message not found');
+      return false;
+    }
+    
+    console.log('🗑️ Message senderId:', message.senderId.toString(), 'User ID:', userId);
+    
+    if (message.senderId.toString() !== userId) {
+      console.log('🗑️ User not authorized to delete this message');
+      return false; // Only sender can delete their own messages
+    }
+    
+    await this.messageModel.findByIdAndDelete(messageId);
+    console.log('🗑️ Message deleted successfully');
+    return true;
+  }
+
+  async clearConversation(conversationId: string, userId: string): Promise<boolean> {
+    console.log('🧹 Attempting to clear conversation:', conversationId, 'for user:', userId);
+    
+    // Verify user is part of conversation
+    const conversation = await this.conversationModel.findById(conversationId);
+    if (!conversation || !conversation.participants.includes(userId as any)) {
+      console.log('🧹 User not part of conversation');
+      return false;
+    }
+    
+    // Delete all messages in the conversation where the user is either sender or receiver
+    const result = await this.messageModel.deleteMany({
+      conversationId,
+      $or: [
+        { senderId: userId },
+        { receiverId: userId }
+      ]
+    });
+    
+    console.log('🧹 Deleted', result.deletedCount, 'messages from conversation');
+    return result.deletedCount > 0;
+  }
 }

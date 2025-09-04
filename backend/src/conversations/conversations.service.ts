@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Conversation, ConversationDocument } from '../schemas/conversation.schema';
 import { Message, MessageDocument } from '../schemas/message.schema';
 
@@ -12,9 +12,13 @@ export class ConversationsService {
   ) {}
 
   async createConversation(userId1: string, userId2: string): Promise<any> {
+    // Convert string IDs to ObjectIds
+    const objectId1 = new Types.ObjectId(userId1);
+    const objectId2 = new Types.ObjectId(userId2);
+    
     // Check if conversation already exists
     const existingConversation = await this.conversationModel.findOne({
-      participants: { $all: [userId1, userId2] }
+      participants: { $all: [objectId1, objectId2] }
     }).populate('participants', 'name mobile preferredLanguage');
 
     if (existingConversation) {
@@ -36,7 +40,7 @@ export class ConversationsService {
 
     // Create new conversation
     const conversation = new this.conversationModel({
-      participants: [userId1, userId2]
+      participants: [objectId1, objectId2]
     });
 
     const savedConversation = await conversation.save();
@@ -60,11 +64,19 @@ export class ConversationsService {
   }
 
   async getUserConversations(userId: string): Promise<any[]> {
+    console.log('🔍 Getting conversations for userId:', userId);
+    
+    // Convert string ID to ObjectId for MongoDB query
+    const userObjectId = new Types.ObjectId(userId);
+    console.log('🔍 Converted to ObjectId:', userObjectId);
+    
     const conversations = await this.conversationModel.find({
-      participants: userId
+      participants: userObjectId
     })
     .populate('participants', 'name mobile preferredLanguage')
     .sort({ updatedAt: -1 });
+    
+    console.log('🔍 Found conversations:', conversations.length);
 
     const conversationsWithLastMessage = await Promise.all(
       conversations.map(async (conv) => {
@@ -98,10 +110,13 @@ export class ConversationsService {
   }
 
   async getConversationMessages(conversationId: string, userId: string): Promise<any> {
+    // Convert string ID to ObjectId for MongoDB query
+    const userObjectId = new Types.ObjectId(userId);
+    
     // Verify user is participant
     const conversation = await this.conversationModel.findOne({
       _id: conversationId,
-      participants: userId
+      participants: userObjectId
     });
 
     if (!conversation) {
