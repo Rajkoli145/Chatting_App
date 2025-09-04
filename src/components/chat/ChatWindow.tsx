@@ -36,6 +36,7 @@ export default function ChatWindow() {
   const [sourceLang, setSourceLang] = useState(user?.preferredLanguage || 'en');
   const [targetLang, setTargetLang] = useState('en');
   const [otherUser, setOtherUser] = useState<User | null>(null);
+  const [receiverId, setReceiverId] = useState<string>('');
   const [showOriginal, setShowOriginal] = useState<{ [key: string]: boolean }>({});
   const [isTyping, setIsTyping] = useState(false);
   const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
@@ -51,6 +52,7 @@ export default function ChatWindow() {
     
     return () => {
       socketService.stopTyping(conversationId);
+      socketService.leaveConversation(conversationId);
     };
   }, [conversationId]);
 
@@ -65,11 +67,11 @@ export default function ChatWindow() {
       const data = await apiService.getMessages(conversationId);
       setMessages(data.messages);
       
-      // Set target language based on other user's preference
+      // Set target language and receiverId based on other user's preference
       if (data.messages.length > 0) {
         const firstMessage = data.messages[0];
         const otherUserId = firstMessage.senderId === user?.id ? firstMessage.receiverId : firstMessage.senderId;
-        // In a real app, you'd fetch the other user's details from the message or conversation
+        setReceiverId(otherUserId);
         setTargetLang(data.messages[0].targetLang || 'en');
       }
     } catch (error) {
@@ -84,9 +86,24 @@ export default function ChatWindow() {
   const setupSocketListeners = () => {
     if (!conversationId) return;
 
+    // Join the conversation room
+    socketService.joinConversation(conversationId);
+
     socketService.onNewMessage((message: SocketMessage) => {
       if (message.conversationId === conversationId) {
-        setMessages(prev => [...prev, message as Message]);
+        const newMessage: Message = {
+          id: message.id,
+          conversationId: message.conversationId,
+          senderId: message.senderId,
+          receiverId: message.receiverId,
+          originalText: message.originalText,
+          sourceLang: message.sourceLang,
+          translatedText: message.translatedText,
+          targetLang: message.targetLang,
+          createdAt: typeof message.timestamp === 'string' ? message.timestamp : message.timestamp.toISOString(),
+          status: message.status as 'sent' | 'delivered' | 'read'
+        };
+        setMessages(prev => [...prev, newMessage]);
       }
     });
 
@@ -120,7 +137,7 @@ export default function ChatWindow() {
   const handleSendMessage = () => {
     if (!newMessage.trim() || !conversationId) return;
 
-    socketService.sendMessage(conversationId, newMessage, sourceLang, targetLang);
+    socketService.sendMessage(conversationId, newMessage, sourceLang, targetLang, receiverId);
     setNewMessage('');
     
     // Stop typing indicator

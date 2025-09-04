@@ -9,7 +9,8 @@ interface SocketMessage {
   sourceLang: string;
   translatedText?: string;
   targetLang?: string;
-  createdAt: string;
+  timestamp: string | Date;
+  status: string;
 }
 
 interface SocketEvents {
@@ -34,10 +35,19 @@ class SocketService {
   connect(token: string) {
     this.token = token;
     
-    // Use environment variable or fallback to localhost:5000
-    const socketUrl = import.meta.env.VITE_API_URL || 'http://localhost:5000';
+    // Use environment variable or detect current host for network access
+    let socketUrl = import.meta.env.VITE_API_URL;
     
-    this.socket = io(socketUrl, {
+    if (!socketUrl) {
+      // If accessing from network IP, use network backend URL
+      if (window.location.hostname === '192.168.0.102') {
+        socketUrl = 'http://192.168.0.102:5001';
+      } else {
+        socketUrl = 'http://localhost:5001';
+      }
+    }
+    
+    this.socket = io(`${socketUrl}/chat`, {
       auth: {
         token: token,
       },
@@ -63,15 +73,21 @@ class SocketService {
   }
 
   // Message events
-  sendMessage(conversationId: string, text: string, sourceLang: string, targetLang: string) {
+  sendMessage(conversationId: string, text: string, sourceLang: string, targetLang: string, receiverId: string) {
     if (this.socket) {
-      this.socket.emit('message:send', { conversationId, text, sourceLang, targetLang });
+      this.socket.emit('sendMessage', { 
+        conversationId, 
+        originalText: text, 
+        sourceLang, 
+        targetLang,
+        receiverId
+      });
     }
   }
 
   onNewMessage(callback: (message: SocketMessage) => void) {
     if (this.socket) {
-      this.socket.on('message:new', callback);
+      this.socket.on('newMessage', callback);
     }
   }
 
@@ -93,22 +109,35 @@ class SocketService {
     }
   }
 
+  // Conversation management
+  joinConversation(conversationId: string) {
+    if (this.socket) {
+      this.socket.emit('joinConversation', { conversationId });
+    }
+  }
+
+  leaveConversation(conversationId: string) {
+    if (this.socket) {
+      this.socket.emit('leaveConversation', { conversationId });
+    }
+  }
+
   // Typing events
   startTyping(conversationId: string) {
     if (this.socket) {
-      this.socket.emit('typing:start', { conversationId });
+      this.socket.emit('typing', { conversationId, isTyping: true });
     }
   }
 
   stopTyping(conversationId: string) {
     if (this.socket) {
-      this.socket.emit('typing:stop', { conversationId });
+      this.socket.emit('typing', { conversationId, isTyping: false });
     }
   }
 
   onTypingUpdate(callback: (data: { conversationId: string; userId: string; isTyping: boolean }) => void) {
     if (this.socket) {
-      this.socket.on('typing:update', callback);
+      this.socket.on('userTyping', callback);
     }
   }
 

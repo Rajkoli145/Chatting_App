@@ -10,16 +10,13 @@ import {
 import { Server, Socket } from 'socket.io';
 import { Injectable, Logger } from '@nestjs/common';
 import { JwtService } from '@nestjs/jwt';
-// import { MessagesService } from './messages.service';
+import { MessagesService } from './messages.service';
 
 @Injectable()
 @WebSocketGateway({
   namespace: '/chat',
-  cors: {
-    origin: ['http://localhost:8080', 'http://localhost:8081'],
-    methods: ['GET', 'POST'],
-    credentials: true,
-  },
+  cors: true,
+  allowEIO3: true,
 })
 export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @WebSocketServer()
@@ -30,7 +27,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   constructor(
     private jwtService: JwtService,
-    // private messagesService: MessagesService,
+    private messagesService: MessagesService,
   ) {}
 
   async handleConnection(client: Socket) {
@@ -49,6 +46,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       
       this.logger.log(`💬 User ${userId} connected to chat`);
       
+      // Store userId on the socket for easier access
+      (client as any).userId = userId;
+      
       // Notify user is online
       client.broadcast.emit('userOnline', { userId });
       
@@ -58,17 +58,6 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
-  handleDisconnect(client: Socket) {
-    // Find and remove user from connected users
-    for (const [userId, socketId] of this.connectedUsers.entries()) {
-      if (socketId === client.id) {
-        this.connectedUsers.delete(userId);
-        client.broadcast.emit('userOffline', { userId });
-        this.logger.log(`💬 User ${userId} disconnected from chat`);
-        break;
-      }
-    }
-  }
 
   @SubscribeMessage('joinConversation')
   async handleJoinConversation(
@@ -88,6 +77,44 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     this.logger.log(`💬 Client left conversation: ${data.conversationId}`);
   }
 
+  @SubscribeMessage('userOnline')
+  handleUserOnline(@MessageBody() data: any, @ConnectedSocket() client: Socket) {
+    const userId = data.userId;
+    console.log('User came online:', userId);
+    
+    // Store user as online
+    this.connectedUsers.set(client.id, userId);
+    
+    // Broadcast to all clients that this user is online
+    this.server.emit('userStatusChanged', {
+      userId: userId,
+      isOnline: true
+    });
+  }
+
+  @SubscribeMessage('userOffline')
+  handleUserOffline(@MessageBody() data: any, @ConnectedSocket() client: Socket) {
+    const userId = data.userId;
+    console.log('User went offline:', userId);
+    
+    // Remove user from connected users
+    this.connectedUsers.delete(client.id);
+    
+    // Broadcast to all clients that this user is offline
+    this.server.emit('userStatusChanged', {
+      userId: userId,
+      isOnline: false
+    });
+  }
+
+  handleDisconnect(client: Socket) {
+    const userId = this.connectedUsers.get(client.id);
+    if (userId) {
+      console.log('User disconnected:', userId);
+      this.connectedUsers.delete(client.id);
+    }
+  }
+
   @SubscribeMessage('sendMessage')
   async handleSendMessage(
     @ConnectedSocket() client: Socket,
@@ -104,24 +131,35 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       const payload = this.jwtService.verify(token);
       const senderId = payload.sub;
 
-      // For now, create a simple message object without database
-      const message = {
-        id: Date.now().toString(),
+      // Save message to database
+      const savedMessage = await this.messagesService.createMessage({
         conversationId: data.conversationId,
         senderId,
         receiverId: data.receiverId,
         originalText: data.originalText,
-        translatedText: data.targetLang ? `[TRANSLATED] ${data.originalText}` : undefined,
         sourceLang: data.sourceLang,
         targetLang: data.targetLang,
-        timestamp: new Date(),
-        status: 'sent',
+      });
+
+      // Create message object for WebSocket emission
+      const message = {
+        id: savedMessage._id.toString(),
+        conversationId: savedMessage.conversationId,
+        senderId: savedMessage.senderId,
+        receiverId: savedMessage.receiverId,
+        originalText: savedMessage.originalText,
+        translatedText: savedMessage.translatedText,
+        sourceLang: savedMessage.sourceLang,
+        targetLang: savedMessage.targetLang,
+        timestamp: (savedMessage as any).createdAt,
+        status: savedMessage.status,
       };
 
-      // Emit to conversation room
+      // Emit to conversation room and directly to receiver
       this.server.to(`conversation_${data.conversationId}`).emit('newMessage', message);
+      this.server.to(`user_${data.receiverId}`).emit('newMessage', message);
 
-      this.logger.log(`💬 Message sent in conversation: ${data.conversationId}`);
+      this.logger.log(`💬 Message saved and sent in conversation: ${data.conversationId} to receiver: ${data.receiverId}`);
       
     } catch (error) {
       this.logger.error('Failed to send message:', error);

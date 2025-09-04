@@ -28,8 +28,8 @@ interface Conversation {
 }
 
 interface ChatSidebarProps {
-  selectedConversationId: string;
-  onSelectConversation: (id: string) => void;
+  selectedConversationId?: string | null;
+  onSelectConversation: (conversationId: string, conversation?: any) => void;
 }
 
 const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSelectConversation }) => {
@@ -100,66 +100,98 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
   };
 
   const handleNewChat = async () => {
-    const query = prompt('Enter name or mobile number to search users:');
-    if (query) {
+    const query = prompt('Enter name or mobile number to search users:\n\nNote: You cannot chat with yourself. Search for other users like "Rajkoli" or "9619564351"');
+    if (query && query.trim()) {
       try {
         console.log('🔍 Searching for users:', query);
-        const users = await apiService.searchUsers(query);
+        const users = await apiService.searchUsers(query.trim());
+        console.log('🔍 Search results received:', users);
+        console.log('🔍 Users type:', typeof users, 'Length:', users?.length);
+        console.log('🔍 First user:', users?.[0]);
         
-        if (users.length === 0) {
+        if (!users || users.length === 0) {
+          console.log('🔍 No users found or empty array');
           toast({
             title: 'No Users Found',
-            description: 'No registered users found with that name or mobile number.',
+            description: `No users found matching "${query}". Try searching by name or mobile number.`,
             variant: 'destructive',
           });
           return;
         }
+        
+        console.log('🔍 Processing', users.length, 'users');
 
-        // If multiple users found, show first one or let user choose
-        const selectedUser = users[0];
+        // If multiple users found, let user choose
+        let selectedUser;
+        if (users.length === 1) {
+          selectedUser = users[0];
+        } else {
+          const userList = users.map((u, i) => `${i + 1}. ${u.name} (${u.mobile})`).join('\n');
+          const choice = prompt(`Multiple users found:\n${userList}\n\nEnter number (1-${users.length}):`);
+          const index = parseInt(choice || '1') - 1;
+          selectedUser = users[index] || users[0];
+        }
+
+        // Map backend user format to frontend format
+        const mappedUser = {
+          id: selectedUser._id || selectedUser.id,
+          name: selectedUser.name,
+          mobile: selectedUser.mobile,
+          preferredLanguage: selectedUser.preferredLanguage
+        };
         
         // Check if conversation already exists
-        const existingConv = conversations.find(conv => conv.user.id === selectedUser.id);
+        const existingConv = conversations.find(conv => conv.user.id === mappedUser.id);
         if (existingConv) {
-          onSelectConversation(existingConv.id);
+          onSelectConversation(existingConv.id, existingConv);
           toast({
             title: 'Existing Chat',
-            description: `Opened existing chat with ${selectedUser.name}`,
+            description: `Opened chat with ${mappedUser.name} (${mappedUser.mobile})`,
           });
           return;
         }
 
-        // Create new conversation with real user data
-        const newConversation: Conversation = {
-          id: `${user?.id}-${selectedUser.id}`,
-          user: {
-            id: selectedUser.id,
-            name: selectedUser.name,
-            preferredLanguage: selectedUser.preferredLanguage,
-            isOnline: false
-          },
-          lastMessage: {
-            text: 'Start a conversation...',
-            timestamp: new Date(),
-            isOwn: false,
-            isTranslated: false
-          },
-          unreadCount: 0
-        };
-        
-        setConversations(prev => [...prev, newConversation]);
-        onSelectConversation(newConversation.id);
-        
-        toast({
-          title: 'New Chat Started',
-          description: `Started chat with ${selectedUser.name}`,
-        });
+        // Create new conversation via API
+        try {
+          const newConv = await apiService.createConversation(mappedUser.id);
+          const newConversation: Conversation = {
+            id: newConv.id,
+            user: {
+              id: mappedUser.id,
+              name: mappedUser.name,
+              preferredLanguage: mappedUser.preferredLanguage,
+              isOnline: true // Set as online for new conversations
+            },
+            lastMessage: {
+              text: 'Chat started',
+              timestamp: new Date(),
+              isOwn: false,
+              isTranslated: false
+            },
+            unreadCount: 0
+          };
+          
+          setConversations(prev => [...prev, newConversation]);
+          onSelectConversation(newConversation.id, newConversation);
+          
+          toast({
+            title: 'New Chat Started',
+            description: `Started chat with ${mappedUser.name} (${mappedUser.mobile})`,
+          });
+        } catch (convError) {
+          console.error('Failed to create conversation:', convError);
+          toast({
+            title: 'Chat Creation Failed',
+            description: 'Failed to create conversation. Please try again.',
+            variant: 'destructive',
+          });
+        }
         
       } catch (error) {
         console.error('Failed to search users:', error);
         toast({
           title: 'Search Failed',
-          description: 'Failed to search for users. Please try again.',
+          description: 'Failed to search for users. Please check your connection.',
           variant: 'destructive',
         });
       }
@@ -295,7 +327,10 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
             className={`p-4 border-b border-border cursor-pointer hover:bg-muted/50 transition-colors ${
               selectedConversationId === conversation.id ? 'bg-muted' : ''
             }`}
-            onClick={() => onSelectConversation(conversation.id)}
+            onClick={() => {
+              console.log('🔄 Conversation clicked:', conversation.id, conversation);
+              onSelectConversation(conversation.id, conversation);
+            }}
           >
             <div className="flex items-start space-x-3">
               <div className="relative">
@@ -322,7 +357,7 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
                   </div>
                   <div className="flex items-center space-x-2">
                     <span className="text-xs text-muted-foreground">
-                      {formatTimestamp(conversation.lastMessage.timestamp)}
+                      {conversation.lastMessage?.timestamp ? formatTimestamp(conversation.lastMessage.timestamp) : 'Just now'}
                     </span>
                     {conversation.unreadCount > 0 && (
                       <Badge className="bg-primary text-primary-foreground text-xs min-w-[20px] h-5 flex items-center justify-center rounded-full">
@@ -334,10 +369,10 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
                 
                 <div className="flex items-center text-sm text-muted-foreground">
                   <p className="truncate flex-1">
-                    {conversation.lastMessage.isOwn && "You: "}
-                    {conversation.lastMessage.text}
+                    {conversation.lastMessage?.isOwn && "You: "}
+                    {conversation.lastMessage?.text || 'No messages yet'}
                   </p>
-                  {conversation.lastMessage.isTranslated && (
+                  {conversation.lastMessage?.isTranslated && (
                     <Globe className="h-3 w-3 ml-2 text-primary" />
                   )}
                 </div>

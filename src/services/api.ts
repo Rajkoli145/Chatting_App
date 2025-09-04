@@ -1,7 +1,16 @@
 
 // API service for backend communication
-// Use environment variable or fallback to localhost:5000
-const API_BASE_URL = import.meta.env.VITE_API_URL || 'http://localhost:5001';
+// Use environment variable or detect current host for network access
+let API_BASE_URL = import.meta.env.VITE_API_URL;
+
+if (!API_BASE_URL) {
+  // If accessing from network IP, use network backend URL
+  if (typeof window !== 'undefined' && window.location.hostname === '192.168.0.102') {
+    API_BASE_URL = 'http://192.168.0.102:5001';
+  } else {
+    API_BASE_URL = 'http://localhost:5001';
+  }
+}
 
 interface User {
   id: string;
@@ -39,6 +48,7 @@ class ApiService {
 
   constructor() {
     this.token = localStorage.getItem('authToken');
+    console.log('🔧 ApiService initialized with token:', !!this.token);
   }
 
   setAuthToken(token: string) {
@@ -59,6 +69,7 @@ class ApiService {
       ...(options.headers as Record<string, string>),
     };
 
+    // Add auth token for all endpoints
     if (this.token) {
       headers.Authorization = `Bearer ${this.token}`;
       console.log('API: Added auth token to request');
@@ -68,6 +79,8 @@ class ApiService {
       const response = await fetch(url, {
         ...options,
         headers,
+        mode: 'cors',
+        credentials: 'include',
       });
 
       console.log(`API: Response status ${response.status} for ${endpoint}`);
@@ -80,12 +93,21 @@ class ApiService {
 
       const data = await response.json();
       console.log(`API: Success response for ${endpoint}:`, data);
+      console.log(`API: Data is array?`, Array.isArray(data), 'Length:', data?.length);
       return data;
     } catch (error: any) {
       console.error(`API: Request failed for ${endpoint}:`, error);
       
       if (error.name === 'TypeError' && error.message.includes('Failed to fetch')) {
         throw new Error('Failed to fetch - Backend server might not be running');
+      }
+      
+      // If we get a 401 error, clear the invalid token
+      if (error.message.includes('401') || error.message.includes('Unauthorized')) {
+        console.log('API: Clearing invalid token due to 401 error');
+        this.token = null;
+        localStorage.removeItem('authToken');
+        localStorage.removeItem('user');
       }
       
       throw error;
@@ -158,25 +180,64 @@ class ApiService {
     this.token = localStorage.getItem('authToken');
     console.log('API: Searching users with query:', query);
     console.log('API: Current token:', this.token ? 'Present' : 'Missing');
-    
-    return this.request<User[]>(`/users/search?q=${encodeURIComponent(query)}`);
+    try {
+      const result = await this.request<User[]>(`/users/search?q=${encodeURIComponent(query)}`);
+      console.log('API: Search users result:', result);
+      console.log('API: Result type:', typeof result, 'Array?', Array.isArray(result));
+      return Array.isArray(result) ? result : [];
+    } catch (error) {
+      console.error('API: Search users error:', error);
+      return [];
+    }
   }
 
   // Chat endpoints
   async getConversations() {
-    return this.request<Conversation[]>('/conversations');
-  }
-
-  async createConversation(userId: string) {
-    return this.request<Conversation>('/conversations', {
-      method: 'POST',
-      body: JSON.stringify({ userId }),
-    });
+    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+    const userId = currentUser.id;
+    console.log('API: Getting conversations for user:', userId);
+    return this.request<Conversation[]>(`/conversations?userId=${userId}`);
   }
 
   async getMessages(conversationId: string, cursor?: string) {
-    const query = cursor ? `?cursor=${cursor}` : '';
+    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+    const userId = currentUser.id;
+    console.log('API: Getting messages for conversation:', conversationId, 'user:', userId);
+    const query = cursor ? `?cursor=${cursor}&userId=${userId}` : `?userId=${userId}`;
     return this.request<{ messages: Message[]; hasMore: boolean }>(`/conversations/${conversationId}/messages${query}`);
+  }
+
+  async sendMessage(conversationId: string, messageData: {
+    originalText: string;
+    sourceLang: string;
+    receiverId: string;
+  }) {
+    const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+    const senderId = currentUser.id;
+    
+    console.log('API: Sending message to conversation:', conversationId, 'from:', senderId, 'to:', messageData.receiverId);
+    return this.request(`/conversations/${conversationId}/messages`, {
+      method: 'POST',
+      body: JSON.stringify({
+        ...messageData,
+        senderId: senderId
+      }),
+    });
+  }
+
+  async createConversation(userId: string) {
+    console.log('API: Creating conversation with user ID:', userId);
+    try {
+      const result = await this.request<Conversation>('/conversations', {
+        method: 'POST',
+        body: JSON.stringify({ userId }),
+      });
+      console.log('API: Conversation created successfully:', result);
+      return result;
+    } catch (error) {
+      console.error('API: Failed to create conversation:', error);
+      throw error;
+    }
   }
 
   logout() {

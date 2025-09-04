@@ -4,7 +4,14 @@ import ChatSidebar from '@/components/ChatSidebar';
 import ChatInterface from '@/components/ChatInterface';
 
 const Index = () => {
-  const [selectedConversationId, setSelectedConversationId] = useState<string | undefined>(undefined);
+  const [selectedConversationId, setSelectedConversationId] = useState<string | null>(null);
+  const [selectedConversation, setSelectedConversation] = useState<any>(null);
+
+  const handleSelectConversation = (conversationId: string, conversation?: any) => {
+    console.log('🔄 Selecting conversation:', conversationId, conversation);
+    setSelectedConversationId(conversationId);
+    setSelectedConversation(conversation);
+  };
 
   return (
     <>
@@ -18,10 +25,13 @@ const Index = () => {
       <div className="flex h-screen bg-background">
         <ChatSidebar 
           selectedConversationId={selectedConversationId}
-          onSelectConversation={setSelectedConversationId}
+          onSelectConversation={handleSelectConversation}
         />
         <div className="flex-1">
-          <ChatInterface selectedConversationId={selectedConversationId} />
+          <ChatInterface 
+          selectedConversationId={selectedConversationId} 
+          selectedConversation={selectedConversation}
+        />
         </div>
       </div>
     </>

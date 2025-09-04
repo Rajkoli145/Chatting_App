@@ -7,6 +7,7 @@ import { Server } from 'socket.io';
 @Injectable()
 export class OtpService {
   private server: Server;
+  private verificationLocks = new Map<string, boolean>();
 
   constructor(
     @InjectModel(Otp.name) private otpModel: Model<OtpDocument>,
@@ -74,52 +75,70 @@ export class OtpService {
   }
 
   async verifyOtp(mobile: string, code: string): Promise<{ isValid: boolean; registrationData?: { name: string; preferredLanguage: string } }> {
-    const otp = await this.otpModel.findOne({
-      mobile,
-      code,
-      isUsed: false,
-      expiresAt: { $gt: new Date() },
-    });
-
-    if (!otp) {
-      // Increment attempts for failed verification
-      await this.otpModel.updateOne(
-        { mobile, isUsed: false },
-        { $inc: { attempts: 1 } }
-      );
-      
-      if (this.server) {
-        this.server.to(`mobile:${mobile}`).emit('otpVerificationFailed', {
-          mobile,
-          message: 'Invalid or expired OTP'
-        });
-      }
-      
-      console.log(`❌ OTP VERIFICATION FAILED for ${mobile} with code ${code}`);
+    const lockKey = `${mobile}:${code}`;
+    
+    // Check if verification is already in progress
+    if (this.verificationLocks.get(lockKey)) {
+      console.log(`🔒 OTP VERIFICATION ALREADY IN PROGRESS for ${mobile} with code ${code}`);
       return { isValid: false };
     }
 
-    // Mark OTP as used
-    otp.isUsed = true;
-    await otp.save();
+    // Set lock
+    this.verificationLocks.set(lockKey, true);
 
-    // Emit successful verification
-    if (this.server) {
-      this.server.to(`mobile:${mobile}`).emit('otpVerified', {
+    try {
+      const otp = await this.otpModel.findOne({
         mobile,
-        message: 'OTP verified successfully'
+        code,
+        isUsed: false,
+        expiresAt: { $gt: new Date() },
       });
+
+      if (!otp) {
+        // Increment attempts for failed verification
+        await this.otpModel.updateOne(
+          { mobile, isUsed: false },
+          { $inc: { attempts: 1 } }
+        );
+        
+        if (this.server) {
+          this.server.to(`mobile:${mobile}`).emit('otpVerificationFailed', {
+            mobile,
+            message: 'Invalid or expired OTP'
+          });
+        }
+        
+        console.log(`❌ OTP VERIFICATION FAILED for ${mobile} with code ${code}`);
+        return { isValid: false };
+      }
+
+      // Mark OTP as used
+      otp.isUsed = true;
+      await otp.save();
+
+      // Emit successful verification
+      if (this.server) {
+        this.server.to(`mobile:${mobile}`).emit('otpVerified', {
+          mobile,
+          message: 'OTP verified successfully'
+        });
+      }
+
+      // Enhanced terminal display for successful verification
+      console.log('\n' + '✅'.repeat(25));
+      console.log(`🎉 OTP VERIFICATION SUCCESS`);
+      console.log(`📱 Mobile: ${mobile}`);
+      console.log(`🔑 Verified Code: ${code}`);
+      console.log(`⏰ Verified at: ${new Date().toLocaleTimeString()}`);
+      console.log('✅'.repeat(25) + '\n');
+
+      return { isValid: true, registrationData: otp.registrationData };
+    } finally {
+      // Release lock after a short delay to prevent immediate duplicate requests
+      setTimeout(() => {
+        this.verificationLocks.delete(lockKey);
+      }, 1000);
     }
-
-    // Enhanced terminal display for successful verification
-    console.log('\n' + '✅'.repeat(25));
-    console.log(`🎉 OTP VERIFICATION SUCCESS`);
-    console.log(`📱 Mobile: ${mobile}`);
-    console.log(`🔑 Verified Code: ${code}`);
-    console.log(`⏰ Verified at: ${new Date().toLocaleTimeString()}`);
-    console.log('✅'.repeat(25) + '\n');
-
-    return { isValid: true, registrationData: otp.registrationData };
   }
 
   async getOtpStatus(mobile: string): Promise<any> {

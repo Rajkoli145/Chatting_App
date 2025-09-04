@@ -1,38 +1,28 @@
-import { Controller, Get, Patch, Body, Query, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Patch, Body, UseGuards, Request, Query } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { UsersService } from './users.service';
-import { IsString, IsOptional } from 'class-validator';
-
-class UpdateProfileDto {
-  @IsOptional()
-  @IsString()
-  name?: string;
-
-  @IsOptional()
-  @IsString()
-  preferredLanguage?: string;
-}
 
 @Controller('users')
-@UseGuards(JwtAuthGuard)
 export class UsersController {
-  constructor(private usersService: UsersService) {}
+  constructor(private readonly usersService: UsersService) {}
 
   @Get('me')
-  async getCurrentUser(@Request() req) {
-    return this.usersService.findById(req.user.id);
+  @UseGuards(JwtAuthGuard)
+  async getProfile(@Request() req) {
+    return this.usersService.findById(req.user.userId);
   }
 
   @Patch('me')
-  async updateProfile(@Request() req, @Body() updateProfileDto: UpdateProfileDto) {
-    return this.usersService.update(req.user.id, updateProfileDto);
+  @UseGuards(JwtAuthGuard)
+  async updateProfile(@Request() req, @Body() updateData: { name?: string; preferredLanguage?: string }) {
+    return this.usersService.update(req.user.userId, updateData);
   }
 
   @Get('search')
+  @UseGuards(JwtAuthGuard)
   async searchUsers(@Query('q') query: string, @Request() req) {
-    if (!query) {
-      return [];
-    }
-    return this.usersService.search(query, req.user.id);
+    console.log('🔍 Search endpoint called with query:', query);
+    console.log('🔍 Current user ID:', req.user?.userId);
+    return this.usersService.search(query, req.user?.userId || '');
   }
 }

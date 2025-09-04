@@ -18,6 +18,7 @@ export default function LoginPage() {
   const [otpTimeRemaining, setOtpTimeRemaining] = useState<number>(0);
   const [isOtpExpired, setIsOtpExpired] = useState(false);
   const [generatedOtp, setGeneratedOtp] = useState<string>('');
+  const [isVerifying, setIsVerifying] = useState(false);
 
   const { toast } = useToast();
   const navigate = useNavigate();
@@ -118,7 +119,14 @@ export default function LoginPage() {
       return;
     }
 
+    // Prevent duplicate requests
+    if (isVerifying) {
+      return;
+    }
+
     setIsLoading(true);
+    setIsVerifying(true);
+    
     try {
       await login(mobile, otp);
 
@@ -135,6 +143,10 @@ export default function LoginPage() {
       });
     } finally {
       setIsLoading(false);
+      // Reset verification flag after a delay to prevent rapid successive attempts
+      setTimeout(() => {
+        setIsVerifying(false);
+      }, 2000);
     }
   };
 
@@ -226,7 +238,7 @@ export default function LoginPage() {
               
               <Button 
                 onClick={handleVerifyOTP}
-                disabled={isLoading}
+                disabled={isLoading || isVerifying}
                 className="w-full bg-gradient-primary hover:shadow-glow transition-all duration-300"
               >
                 {isLoading ? 'Verifying...' : 'Verify OTP'}

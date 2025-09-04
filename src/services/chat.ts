@@ -1,5 +1,7 @@
 import { io, Socket } from 'socket.io-client';
 
+const CHAT_SERVER_URL = 'http://localhost:5001';
+
 interface Message {
   id: string;
   conversationId: string;
@@ -16,24 +18,51 @@ interface Message {
 class ChatService {
   private socket: Socket | null = null;
   private token: string | null = null;
+  private onUserStatusChange?: (data: { userId: string; isOnline: boolean }) => void;
 
   connect(token: string) {
-    this.token = token;
-    this.socket = io('http://localhost:5001/chat', {
+    if (this.socket?.connected) {
+      console.log('💬 Already connected to chat');
+      return;
+    }
+
+    console.log('💬 Connecting to chat WebSocket...');
+    this.socket = io(CHAT_SERVER_URL, {
       auth: { token },
       transports: ['websocket'],
+      forceNew: true
     });
 
     this.socket.on('connect', () => {
-      console.log('💬 Connected to chat WebSocket');
+      console.log('✅ Connected to chat server');
+      
+      // Notify server that user is online
+      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+      if (currentUser.id) {
+        this.socket?.emit('userOnline', { userId: currentUser.id });
+      }
     });
 
     this.socket.on('disconnect', () => {
-      console.log('💬 Disconnected from chat WebSocket');
+      console.log('❌ Disconnected from chat server');
+      
+      // Notify server that user is offline
+      const currentUser = JSON.parse(localStorage.getItem('currentUser') || '{}');
+      if (currentUser.id) {
+        this.socket?.emit('userOffline', { userId: currentUser.id });
+      }
     });
 
-    this.socket.on('connect_error', (error) => {
-      console.error('💬 Chat WebSocket connection error:', error);
+    this.socket.on('messageError', (error) => {
+      console.error('💬 Message error:', error);
+    });
+
+    // Listen for user status changes
+    this.socket.on('userStatusChanged', (data: { userId: string; isOnline: boolean }) => {
+      console.log('👤 User status changed:', data);
+      if (this.onUserStatusChange) {
+        this.onUserStatusChange(data);
+      }
     });
   }
 
@@ -87,6 +116,10 @@ class ChatService {
     if (this.socket) {
       this.socket.on('userTyping', callback);
     }
+  }
+
+  onUserStatusChanged(callback: (data: { userId: string; isOnline: boolean }) => void) {
+    this.onUserStatusChange = callback;
   }
 
   onUserOnline(callback: (data: { userId: string }) => void) {

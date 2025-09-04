@@ -12,14 +12,17 @@ import { useToast } from '@/hooks/use-toast';
 
 interface Message {
   id: string;
+  conversationId: string;
+  senderId: string;
+  receiverId: string;
   originalText: string;
   translatedText?: string;
   sourceLang: string;
   targetLang?: string;
-  senderId: string;
+  status: 'sending' | 'sent' | 'delivered' | 'read' | 'failed';
+  createdAt: Date;
   timestamp: Date;
   isOwn: boolean;
-  status: 'sent' | 'delivered' | 'read';
 }
 
 interface User {
@@ -32,9 +35,18 @@ interface User {
 
 interface ChatInterfaceProps {
   selectedConversationId?: string;
+  selectedConversation?: {
+    id: string;
+    user: {
+      id: string;
+      name: string;
+      preferredLanguage: string;
+      isOnline: boolean;
+    };
+  };
 }
 
-const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId }) => {
+const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, selectedConversation }) => {
   const { user } = useAuth();
   const { toast } = useToast();
   const [messages, setMessages] = useState<Message[]>([]);
@@ -42,6 +54,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId })
   const [showTranslations, setShowTranslations] = useState(true);
   const [showOriginal, setShowOriginal] = useState<{ [key: string]: boolean }>({});
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Connect to chat WebSocket on mount
@@ -56,11 +69,21 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId })
       // Set up message listeners
       chatService.onNewMessage((message) => {
         console.log('📨 Received new message:', message);
-        setMessages(prev => [...prev, {
+        const newMessage = {
           ...message,
+          createdAt: new Date(message.timestamp),
           timestamp: new Date(message.timestamp),
           isOwn: message.senderId === user.id
-        }]);
+        };
+        
+        setMessages(prev => {
+          const updatedMessages = [...prev, newMessage];
+          // Update cache when new message arrives
+          if (message.conversationId) {
+            localStorage.setItem(`messages_${message.conversationId}`, JSON.stringify(updatedMessages));
+          }
+          return updatedMessages;
+        });
       });
 
       chatService.onUserTyping(({ userId, isTyping }) => {
@@ -92,14 +115,36 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId })
     }
   }, [user]);
 
-  // Join conversation when selected
+  // Join conversation when selected and load/restore messages
   useEffect(() => {
     if (selectedConversationId) {
       console.log('🏠 Joining conversation:', selectedConversationId);
       chatService.joinConversation(selectedConversationId);
+      
+      // Try to restore messages from localStorage first
+      const cachedMessages = localStorage.getItem(`messages_${selectedConversationId}`);
+      if (cachedMessages && !messagesLoaded) {
+        try {
+          const parsedMessages = JSON.parse(cachedMessages);
+          console.log('📦 Restoring cached messages:', parsedMessages.length);
+          setMessages(parsedMessages.map((msg: any) => ({
+            ...msg,
+            createdAt: new Date(msg.createdAt),
+            timestamp: new Date(msg.timestamp),
+            isOwn: msg.senderId === user?.id
+          })));
+        } catch (error) {
+          console.error('Failed to parse cached messages:', error);
+        }
+      }
+      
+      // Load fresh messages from API
       loadMessages();
+      setMessagesLoaded(true);
+    } else {
+      setMessagesLoaded(false);
     }
-  }, [selectedConversationId]);
+  }, [selectedConversationId, user?.id]);
 
   // Auto-scroll to bottom
   useEffect(() => {
@@ -111,31 +156,124 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId })
     
     try {
       const data = await apiService.getMessages(selectedConversationId);
-      setMessages(data.messages.map(msg => ({
+      const messages = Array.isArray(data) ? data : data.messages || [];
+      const formattedMessages = messages.map(msg => ({
         ...msg,
+        createdAt: new Date(msg.createdAt),
         timestamp: new Date(msg.createdAt),
         isOwn: msg.senderId === user?.id
-      })));
+      }));
+      
+      setMessages(formattedMessages);
+      
+      // Cache messages in localStorage for persistence
+      localStorage.setItem(`messages_${selectedConversationId}`, JSON.stringify(formattedMessages));
+      console.log('💾 Cached messages for conversation:', selectedConversationId);
     } catch (error) {
       console.error('Failed to load messages:', error);
     }
   };
 
   const handleSendMessage = async () => {
-    if (!newMessage.trim() || !selectedConversationId || !user) return;
+    if (!newMessage.trim() || !selectedConversationId || !selectedConversation) return;
 
-    console.log('📤 Sending message:', newMessage);
-    
-    const messageData = {
+    const receiverId = selectedConversation.user.id;
+    console.log('📤 Sending message from:', user?.id, 'to:', receiverId);
+
+    const tempMessage: Message = {
+      id: `temp-${Date.now()}`,
       conversationId: selectedConversationId,
-      receiverId: 'other-user-id', // TODO: Get from conversation
+      senderId: user?.id || 'current-user',
+      receiverId: receiverId,
       originalText: newMessage,
-      sourceLang: user.preferredLanguage || 'en',
-      targetLang: 'auto', // TODO: Detect target language
+      translatedText: undefined,
+      sourceLang: user?.preferredLanguage || 'en',
+      targetLang: undefined,
+      status: 'sending',
+      createdAt: new Date(),
+      timestamp: new Date(),
+      isOwn: true,
     };
 
-    chatService.sendMessage(messageData);
+    // Add temp message immediately for UI feedback
+    setMessages(prev => [...prev, tempMessage]);
     setNewMessage('');
+
+    try {
+      console.log('📤 Attempting to send message via API first...');
+      
+      // Try API first
+      const apiResponse = await apiService.sendMessage(selectedConversationId, {
+        originalText: newMessage,
+        sourceLang: user?.preferredLanguage || 'en',
+        receiverId: receiverId
+      });
+      
+      console.log('✅ Message sent via API:', apiResponse);
+      
+      // Update temp message with real data
+      setMessages(prev => {
+        const updatedMessages = prev.map(msg => 
+          msg.id === tempMessage.id 
+            ? { 
+                ...msg,
+                id: (apiResponse as any).id,
+                status: 'sent' as const,
+                createdAt: new Date((apiResponse as any).createdAt),
+                timestamp: new Date((apiResponse as any).createdAt)
+              }
+            : msg
+        );
+        
+        // Update cache when message is sent
+        localStorage.setItem(`messages_${selectedConversationId}`, JSON.stringify(updatedMessages));
+        return updatedMessages;
+      });
+      
+    } catch (apiError) {
+      console.error('❌ API send failed, trying WebSocket fallback:', apiError);
+      
+      // Fallback to WebSocket
+      try {
+        chatService.sendMessage({
+          conversationId: selectedConversationId,
+          originalText: newMessage,
+          sourceLang: user?.preferredLanguage || 'en',
+          targetLang: 'auto',
+          receiverId: receiverId
+        });
+        
+        console.log('✅ Message sent via WebSocket');
+        
+        // Update temp message status
+        setMessages(prev => {
+          const updatedMessages = prev.map(msg => 
+            msg.id === tempMessage.id 
+              ? { ...msg, status: 'sent' as const }
+              : msg
+          );
+          // Update cache
+          localStorage.setItem(`messages_${selectedConversationId}`, JSON.stringify(updatedMessages));
+          return updatedMessages;
+        });
+        
+      } catch (wsError) {
+        console.error('❌ WebSocket send also failed:', wsError);
+        
+        // Update temp message to show error
+        setMessages(prev => prev.map(msg => 
+          msg.id === tempMessage.id 
+            ? { ...msg, status: 'failed' }
+            : msg
+        ));
+        
+        toast({
+          title: 'Message Failed',
+          description: 'Failed to send message. Please try again.',
+          variant: 'destructive',
+        });
+      }
+    }
   };
 
   const handleKeyPress = (e: React.KeyboardEvent) => {
@@ -205,13 +343,18 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId })
             </AvatarFallback>
           </Avatar>
           <div>
-            <h2 className="font-semibold text-foreground">Chat User</h2>
+            <h2 className="font-semibold text-foreground">
+              {selectedConversation?.user?.name || 'Chat User'}
+            </h2>
             <div className="flex items-center space-x-2 text-sm text-muted-foreground">
-              <div className="w-2 h-2 rounded-full bg-muted" />
-              <span>Offline</span>
+              <div className={`w-2 h-2 rounded-full ${selectedConversation?.user?.isOnline ? 'bg-green-500' : 'bg-gray-400'}`} />
+              <span>{selectedConversation?.user?.isOnline ? 'Online' : 'Offline'}</span>
+              {typingUsers.size > 0 && (
+                <span className="text-blue-500 animate-pulse">typing...</span>
+              )}
               <Badge variant="secondary" className="text-xs">
                 <Globe className="h-3 w-3 mr-1" />
-                EN
+                {selectedConversation?.user?.preferredLanguage?.toUpperCase() || 'EN'}
               </Badge>
             </div>
           </div>

@@ -27,7 +27,7 @@ export class MessagesService {
       throw new NotFoundException('Conversation not found');
     }
     
-    if (conversation.user1Id.toString() !== senderId && conversation.user2Id.toString() !== senderId) {
+    if (!conversation.participants.includes(senderId as any)) {
       throw new ForbiddenException('User not part of this conversation');
     }
 
@@ -72,7 +72,7 @@ export class MessagesService {
   ): Promise<{ messages: MessageDocument[]; hasMore: boolean }> {
     // Verify user is part of conversation
     const conversation = await this.conversationModel.findById(conversationId);
-    if (!conversation || (conversation.user1Id.toString() !== userId && conversation.user2Id.toString() !== userId)) {
+    if (!conversation || !conversation.participants.includes(userId as any)) {
       throw new ForbiddenException('User not part of this conversation');
     }
 

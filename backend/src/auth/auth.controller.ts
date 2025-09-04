@@ -23,10 +23,3 @@ export class AuthController {
   }
 }
 
-@Controller('conversations')
-export class ConversationsController {
-  @Get()
-  async getConversations() {
-    return [];
-  }
-}

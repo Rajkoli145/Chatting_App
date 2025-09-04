@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { MongooseModule } from '@nestjs/mongoose';
-import { JwtModule } from '@nestjs/jwt';
+import { PassportModule } from '@nestjs/passport';
 import { AuthModule } from './auth/auth.module';
 import { UsersModule } from './users/users.module';
+import { ConversationsModule } from './conversations/conversations.module';
 
 @Module({
   imports: [
@@ -11,12 +12,10 @@ import { UsersModule } from './users/users.module';
       isGlobal: true,
     }),
     MongooseModule.forRoot(process.env.MONGODB_URI || 'mongodb://localhost:27017/cross-lingo-talk'),
-    JwtModule.register({
-      secret: process.env.JWT_SECRET || 'your-secret-key',
-      signOptions: { expiresIn: process.env.JWT_EXPIRES_IN || '7d' },
-    }),
+    PassportModule,
     AuthModule,
     UsersModule,
+    ConversationsModule,
   ],
 })
 export class AppModule {}
