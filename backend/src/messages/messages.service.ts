@@ -13,6 +13,23 @@ export class MessagesService {
     private translationService: TranslationService,
   ) {}
 
+  // Helper methods for ChatGateway
+  async findConversationById(conversationId: string): Promise<ConversationDocument> {
+    const conversation = await this.conversationModel.findById(conversationId);
+    if (!conversation) {
+      throw new NotFoundException('Conversation not found');
+    }
+    return conversation;
+  }
+
+  getUserModel() {
+    return this.conversationModel.db.model('User');
+  }
+
+  getTranslationService() {
+    return this.translationService;
+  }
+
   async create(
     conversationId: string,
     senderId: string,
@@ -31,15 +48,25 @@ export class MessagesService {
       throw new ForbiddenException('User not part of this conversation');
     }
 
-    // Translate message if target language is specified
+    // Get receiver's preferred language for auto-translation
+    const User = this.conversationModel.db.model('User');
+    const receiver = await User.findById(receiverId);
+    const receiverPreferredLang = receiver?.preferredLanguage || targetLang || 'en';
+
+    console.log(`🌐 Translation setup: text="${text}", sourceLang="${sourceLang}", receiverPreferredLang="${receiverPreferredLang}"`);
+
+    // Auto-translate message to receiver's preferred language
     let translatedText: string | undefined;
-    if (targetLang && targetLang !== sourceLang) {
+    if (receiverPreferredLang && receiverPreferredLang !== sourceLang) {
       try {
-        translatedText = await this.translationService.translate(text, sourceLang, targetLang);
+        translatedText = await this.translationService.translate(text, sourceLang, receiverPreferredLang);
+        console.log(`🌐 Translation result: "${text}" (${sourceLang} → ${receiverPreferredLang}) = "${translatedText}"`);
       } catch (error) {
         console.error('Translation failed:', error);
         // Continue without translation if service fails
       }
+    } else {
+      console.log(`🌐 Skipping translation: same language (${sourceLang} = ${receiverPreferredLang})`);
     }
 
     const message = new this.messageModel({

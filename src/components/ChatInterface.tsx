@@ -129,7 +129,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
         chatService.disconnect();
       };
     }
-  }, [user]);
+  }, [user, selectedConversationId]);
 
   // Join conversation when selected and load messages
   useEffect(() => {
@@ -192,29 +192,12 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
     const receiverId = selectedConversation.user.id;
     console.log('📤 Sending message from:', user?.id, 'to:', receiverId);
 
-    const tempMessage: Message = {
-      id: `temp-${Date.now()}`,
-      conversationId: selectedConversationId,
-      senderId: user?._id || user?.id || '',
-      receiverId: receiverId,
-      originalText: newMessage,
-      translatedText: '',
-      sourceLang: user?.preferredLanguage || 'en',
-      targetLang: selectedConversation.user.preferredLanguage,
-      createdAt: new Date(),
-      timestamp: new Date(),
-      status: 'sending',
-      isOwn: true
-    };
-
-    // Add message immediately to UI
-    const updatedMessages = [...messages, tempMessage];
-    setMessages(updatedMessages);
+    // Remove optimistic UI update - let WebSocket handle message display
     
     setNewMessage('');
 
     try {
-      // Send via WebSocket for real-time delivery
+      // Send via WebSocket only - backend handles persistence
       chatService.sendMessage({
         conversationId: selectedConversationId,
         originalText: newMessage,
@@ -223,28 +206,15 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
         receiverId: receiverId
       });
 
-      // Also send via API for persistence
-      await apiService.sendMessage(selectedConversationId, {
-        originalText: newMessage,
-        sourceLang: user?.preferredLanguage || 'en',
-        receiverId: receiverId
-      });
-
       console.log('✅ Message sent successfully');
-      
-      // Update message status to sent
-      const sentMessages = updatedMessages.map(msg => 
-        msg.id === tempMessage.id ? { ...msg, status: 'sent' as const } : msg
-      );
-      setMessages(sentMessages);
       
     } catch (error) {
       console.error('❌ Failed to send message:', error);
-      // Update message status to failed
-      const failedMessages = updatedMessages.map(msg => 
-        msg.id === tempMessage.id ? { ...msg, status: 'failed' as const } : msg
-      );
-      setMessages(failedMessages);
+      toast({
+        title: 'Error',
+        description: 'Failed to send message',
+        variant: 'destructive',
+      });
     }
   };
 
@@ -380,8 +350,37 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
                     }`}
                   >
                     <p className="text-sm">
-                      {message.originalText || 'No text'}
+                      {showOriginal[message.id] 
+                        ? message.originalText 
+                        : (message.translatedText || message.originalText || 'No text')
+                      }
                     </p>
+                    
+                    {message.translatedText && message.translatedText !== message.originalText && (
+                      <div className="flex items-center justify-between text-xs opacity-70 mt-2">
+                        <div className="flex items-center space-x-1">
+                          <Globe className="h-3 w-3" />
+                          <span>
+                            {showOriginal[message.id] 
+                              ? `Original (${message.sourceLang})`
+                              : `Translated from ${message.sourceLang}`
+                            }
+                          </span>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="h-auto p-0 text-xs opacity-70 hover:opacity-100"
+                          onClick={() => toggleOriginal(message.id)}
+                        >
+                          {showOriginal[message.id] ? (
+                            <>👁️ Show Translation</>
+                          ) : (
+                            <>📝 Show Original</>
+                          )}
+                        </Button>
+                      </div>
+                    )}
                   </div>
                   <div className={`text-xs text-gray-500 mt-1 ${message.isOwn ? 'text-right' : 'text-left'}`}>
                     {message.timestamp ? new Date(message.timestamp).toLocaleTimeString() : 'No time'}

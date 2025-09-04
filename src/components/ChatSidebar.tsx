@@ -5,9 +5,12 @@ import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiService } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
+import LanguageSettings from './LanguageSettings';
 
 interface Conversation {
   id: string;
@@ -278,15 +281,17 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
                 <Settings className="h-4 w-4 mr-2" />
                 Update Name
               </DropdownMenuItem>
-              <DropdownMenuItem onClick={() => {
-                const newLang = prompt('Enter language code (en, hi, mr, es, fr, pt, zh, ja):', user?.preferredLanguage || 'en');
-                if (newLang && newLang !== user?.preferredLanguage) {
-                  updateLanguage(newLang);
-                }
-              }}>
-                <Globe className="h-4 w-4 mr-2" />
-                Update Language
-              </DropdownMenuItem>
+              <Dialog>
+                <DialogTrigger asChild>
+                  <DropdownMenuItem onSelect={(e) => e.preventDefault()}>
+                    <Globe className="h-4 w-4 mr-2" />
+                    Language Settings
+                  </DropdownMenuItem>
+                </DialogTrigger>
+                <DialogContent>
+                  <LanguageSettings onClose={() => {}} />
+                </DialogContent>
+              </Dialog>
               <DropdownMenuItem 
                 className="text-destructive"
                 onClick={logout}

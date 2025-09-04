@@ -103,12 +103,14 @@ class ApiService {
         throw new Error('Failed to fetch - Backend server might not be running');
       }
       
-      // If we get a 401 error, clear the invalid token
+      // If we get a 401 error, clear the invalid token and redirect to login
       if (error.message.includes('401') || error.message.includes('Unauthorized')) {
         console.log('API: Clearing invalid token due to 401 error');
         this.token = null;
         localStorage.removeItem('authToken');
         localStorage.removeItem('user');
+        // Force page reload to redirect to login
+        window.location.reload();
       }
       
       throw error;

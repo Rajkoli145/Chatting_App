@@ -67,6 +67,8 @@ class SocketService {
 
   disconnect() {
     if (this.socket) {
+      // Remove all listeners before disconnecting
+      this.socket.removeAllListeners();
       this.socket.disconnect();
       this.socket = null;
     }
@@ -87,6 +89,8 @@ class SocketService {
 
   onNewMessage(callback: (message: SocketMessage) => void) {
     if (this.socket) {
+      // Remove any existing listeners first
+      this.socket.off('newMessage');
       this.socket.on('newMessage', callback);
     }
   }
@@ -137,14 +141,41 @@ class SocketService {
 
   onTypingUpdate(callback: (data: { conversationId: string; userId: string; isTyping: boolean }) => void) {
     if (this.socket) {
+      this.socket.off('userTyping');
       this.socket.on('userTyping', callback);
     }
   }
 
   // Presence events
-  onPresenceUpdate(callback: (data: { userId: string; online: boolean }) => void) {
+  onUserStatusChanged(callback: (data: { userId: string; isOnline: boolean }) => void) {
     if (this.socket) {
-      this.socket.on('presence:update', callback);
+      this.socket.off('userStatusChanged');
+      this.socket.on('userStatusChanged', callback);
+    }
+  }
+
+  getUserStatus(userId: string) {
+    if (this.socket) {
+      this.socket.emit('getUserStatus', { userId });
+    }
+  }
+
+  onUserStatusResponse(callback: (data: { userId: string; isOnline: boolean }) => void) {
+    if (this.socket) {
+      this.socket.off('userStatusResponse');
+      this.socket.on('userStatusResponse', callback);
+    }
+  }
+
+  getOnlineUsers() {
+    if (this.socket) {
+      this.socket.emit('getOnlineUsers');
+    }
+  }
+
+  onOnlineUsersResponse(callback: (data: { onlineUsers: string[] }) => void) {
+    if (this.socket) {
+      this.socket.on('onlineUsersResponse', callback);
     }
   }
 
@@ -157,12 +188,14 @@ class SocketService {
 
   onMessageDeleted(callback: (data: { messageId: string; conversationId: string }) => void) {
     if (this.socket) {
+      this.socket.off('messageDeleted');
       this.socket.on('messageDeleted', callback);
     }
   }
 
   onDeleteMessageError(callback: (data: { error: string }) => void) {
     if (this.socket) {
+      this.socket.off('deleteMessageError');
       this.socket.on('deleteMessageError', callback);
     }
   }
@@ -176,18 +209,27 @@ class SocketService {
 
   onConversationCleared(callback: (data: { conversationId: string; clearedBy: string }) => void) {
     if (this.socket) {
+      this.socket.off('conversationCleared');
       this.socket.on('conversationCleared', callback);
     }
   }
 
   onClearConversationError(callback: (data: { error: string }) => void) {
     if (this.socket) {
+      this.socket.off('clearConversationError');
       this.socket.on('clearConversationError', callback);
     }
   }
 
   isConnected(): boolean {
     return this.socket?.connected ?? false;
+  }
+
+  // Method to clean up all listeners
+  removeAllListeners() {
+    if (this.socket) {
+      this.socket.removeAllListeners();
+    }
   }
 }
 

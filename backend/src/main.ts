@@ -41,7 +41,7 @@ async function bootstrap() {
       process.env.FRONTEND_URL || 'http://localhost:8081'
     ],
     credentials: true,
-    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept'],
     exposedHeaders: ['Access-Control-Allow-Origin'],
   });

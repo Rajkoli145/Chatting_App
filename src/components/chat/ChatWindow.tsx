@@ -40,6 +40,7 @@ export default function ChatWindow() {
   const [showOriginal, setShowOriginal] = useState<{ [key: string]: boolean }>({});
   const [isTyping, setIsTyping] = useState(false);
   const [isOtherUserTyping, setIsOtherUserTyping] = useState(false);
+  const [userOnlineStatus, setUserOnlineStatus] = useState<{ [userId: string]: boolean }>({});
   
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
@@ -49,6 +50,11 @@ export default function ChatWindow() {
 
     loadMessages();
     setupSocketListeners();
+    
+    // Get initial online status for other user
+    if (receiverId) {
+      socketService.getUserStatus(receiverId);
+    }
     
     return () => {
       socketService.stopTyping(conversationId);
@@ -70,9 +76,14 @@ export default function ChatWindow() {
       // Set target language and receiverId based on other user's preference
       if (data.messages && data.messages.length > 0) {
         const firstMessage = data.messages[0];
-        const otherUserId = firstMessage.senderId === user?.id ? firstMessage.receiverId : firstMessage.senderId;
+        console.log(`🎨 Rendering message ${0}:`, firstMessage);
+        console.log(`🔤 Original: "${firstMessage.originalText}", Translated: "${firstMessage.translatedText}"`);
+        const otherUserId = firstMessage.senderId === (user?._id || user?.id) ? firstMessage.receiverId : firstMessage.senderId;
         setReceiverId(otherUserId);
         setTargetLang(data.messages[0].targetLang || 'en');
+        
+        // Get online status for the other user
+        socketService.getUserStatus(otherUserId);
       }
     } catch (error) {
       console.error('Error loading messages:', error);
@@ -92,6 +103,15 @@ export default function ChatWindow() {
 
     socketService.onNewMessage((message: SocketMessage) => {
       if (message.conversationId === conversationId) {
+        console.log('📨 Received WebSocket message:', message);
+        console.log('🔤 WebSocket translatedText:', message.translatedText);
+        
+        // Skip messages sent by current user to prevent duplicates
+        if (message.senderId === (user?._id || user?.id)) {
+          console.log('⚠️ Skipping own message to prevent duplicate:', message.id);
+          return;
+        }
+        
         const newMessage: Message = {
           id: message.id,
           conversationId: message.conversationId,
@@ -104,7 +124,17 @@ export default function ChatWindow() {
           createdAt: typeof message.timestamp === 'string' ? message.timestamp : message.timestamp.toISOString(),
           status: message.status as 'sent' | 'delivered' | 'read'
         };
-        setMessages(prev => [...prev, newMessage]);
+        console.log('📝 Created message object:', newMessage);
+        
+        // Check if message already exists to prevent duplicates
+        setMessages(prev => {
+          const existingMessage = prev.find(msg => msg.id === message.id);
+          if (existingMessage) {
+            console.log('⚠️ Duplicate message detected, skipping:', message.id);
+            return prev;
+          }
+          return [...prev, newMessage];
+        });
       }
     });
 
@@ -167,6 +197,21 @@ export default function ChatWindow() {
         description: data.error,
         variant: 'destructive',
       });
+    });
+
+    // Handle user status changes
+    socketService.onUserStatusChanged((data) => {
+      setUserOnlineStatus(prev => ({
+        ...prev,
+        [data.userId]: data.isOnline
+      }));
+    });
+
+    socketService.onUserStatusResponse((data) => {
+      setUserOnlineStatus(prev => ({
+        ...prev,
+        [data.userId]: data.isOnline
+      }));
     });
   };
 
@@ -274,8 +319,14 @@ export default function ChatWindow() {
               {otherUser?.name || 'User'}
             </h2>
             <div className="flex items-center space-x-2 text-sm text-muted-foreground">
-              <div className="w-2 h-2 rounded-full bg-success" />
-              <span>Online</span>
+              <div className={`w-2 h-2 rounded-full ${
+                receiverId && userOnlineStatus[receiverId] 
+                  ? 'bg-green-500' 
+                  : 'bg-gray-400'
+              }`} />
+              <span>
+                {receiverId && userOnlineStatus[receiverId] ? 'Online' : 'Offline'}
+              </span>
               {otherUser && (
                 <Badge variant="secondary" className="text-xs">
                   <Globe className="h-3 w-3 mr-1" />
@@ -360,8 +411,11 @@ export default function ChatWindow() {
 
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
-        {messages.map((message) => (
-          <div
+        {messages.map((message, index) => {
+          console.log(`🎨 Rendering message ${index}:`, message);
+          console.log(`🔤 Original: "${message.originalText}", Translated: "${message.translatedText}"`);
+          return (
+            <div
             key={message.id}
             className={`flex ${message.senderId === (user._id || user.id) ? 'justify-end' : 'justify-start'}`}
           >
@@ -383,10 +437,12 @@ export default function ChatWindow() {
                     >
                       <div className="space-y-2">
                         <p className="text-sm leading-relaxed">
-                          {showOriginal[message.id] 
-                            ? message.originalText 
-                            : (message.translatedText || message.originalText)
-                          }
+                          {(() => {
+                            console.log(`🖼️ Displaying message ${message.id}: original="${message.originalText}", translated="${message.translatedText}", showOriginal=${showOriginal[message.id]}`);
+                            return showOriginal[message.id] 
+                              ? message.originalText 
+                              : (message.translatedText || message.originalText);
+                          })()}
                         </p>
                         
                         {message.translatedText && message.translatedText !== message.originalText && (
@@ -489,7 +545,8 @@ export default function ChatWindow() {
               </div>
             </div>
           </div>
-        ))}
+          );
+        })}
         
         {isOtherUserTyping && (
           <div className="flex justify-start">
