@@ -1,9 +1,11 @@
 import React, { useState, useEffect } from 'react';
-import { Search, Plus, Globe, Settings, LogOut } from 'lucide-react';
+import { Search, Plus, Globe, Settings, LogOut, User } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
-import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { Badge } from '@/components/ui/badge';
+import { ScrollArea } from '@/components/ui/scroll-area';
+import { Separator } from '@/components/ui/separator';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogTrigger } from '@/components/ui/dialog';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -11,6 +13,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { apiService } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
 import LanguageSettings from './LanguageSettings';
+import { socketService } from '@/services/socket';
 
 interface Conversation {
   id: string;
@@ -44,20 +47,60 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
   console.log('ChatSidebar: User name:', user?.name);
   console.log('ChatSidebar: User language:', user?.preferredLanguage);
   
-  // Force re-render when user data changes
   useEffect(() => {
     console.log('ChatSidebar: User state changed:', user);
   }, [user]);
   
   const [conversations, setConversations] = useState<Conversation[]>([]);
-  const [searchQuery, setSearchQuery] = useState('');
   const [isLoading, setIsLoading] = useState(true);
+  const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
+  const [searchQuery, setSearchQuery] = useState('');
 
   useEffect(() => {
     if (user?._id || user?.id) {
       loadConversations();
+      setupOnlineStatusTracking();
     }
   }, [user]);
+
+  const setupOnlineStatusTracking = () => {
+    // Listen for user status changes from socket
+    socketService.onUserStatusChanged((data) => {
+      setOnlineUsers(prev => {
+        const newSet = new Set(prev);
+        if (data.isOnline) {
+          newSet.add(data.userId);
+        } else {
+          newSet.delete(data.userId);
+        }
+        return newSet;
+      });
+      
+      // Update conversations with new online status
+      setConversations(prev => prev.map(conv => ({
+        ...conv,
+        user: {
+          ...conv.user,
+          isOnline: data.userId === conv.user.id ? data.isOnline : conv.user.isOnline
+        }
+      })));
+    });
+
+    // Request current online users
+    socketService.getOnlineUsers();
+    socketService.onOnlineUsersResponse((data) => {
+      setOnlineUsers(new Set(data.onlineUsers));
+      
+      // Update all conversations with online status
+      setConversations(prev => prev.map(conv => ({
+        ...conv,
+        user: {
+          ...conv.user,
+          isOnline: data.onlineUsers.includes(conv.user.id)
+        }
+      })));
+    });
+  };
 
   const loadConversations = async () => {
     try {
@@ -68,7 +111,7 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
         ...conv,
         user: {
           ...conv.user,
-          isOnline: false, // Default to offline
+          isOnline: onlineUsers.has(conv.user.id), // Check actual online status
           avatar: undefined
         },
         unreadCount: 0,
@@ -165,7 +208,7 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
               id: mappedUser.id,
               name: mappedUser.name,
               preferredLanguage: mappedUser.preferredLanguage,
-              isOnline: true // Set as online for new conversations
+              isOnline: onlineUsers.has(mappedUser.id) // Check actual online status
             },
             lastMessage: {
               text: 'Chat started',

@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException, ForbiddenException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/mongoose';
-import { Model } from 'mongoose';
+import { Model, Types } from 'mongoose';
 import { Message, MessageDocument, MessageStatus } from '../schemas/message.schema';
 import { Conversation, ConversationDocument } from '../schemas/conversation.schema';
 import { TranslationService } from '../translation/translation.service';
@@ -44,7 +44,13 @@ export class MessagesService {
       throw new NotFoundException('Conversation not found');
     }
     
-    if (!conversation.participants.includes(senderId as any)) {
+    // Convert senderId to ObjectId for proper comparison
+    const senderObjectId = new Types.ObjectId(senderId);
+    const isParticipant = conversation.participants.some(participantId => 
+      participantId.toString() === senderId || participantId.equals(senderObjectId)
+    );
+    
+    if (!isParticipant) {
       throw new ForbiddenException('User not part of this conversation');
     }
 
