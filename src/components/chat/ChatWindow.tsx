@@ -412,139 +412,71 @@ export default function ChatWindow() {
       {/* Messages */}
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message, index) => {
-          console.log(`🎨 Rendering message ${index}:`, message);
-          console.log(`🔤 Original: "${message.originalText}", Translated: "${message.translatedText}"`);
+          const isOwn = message.senderId === (user._id || user.id);
+          const messageContent = message.translatedText || message.originalText;
+          const isGif = messageContent.startsWith('[GIF]');
+          const gifUrl = isGif ? messageContent.replace('[GIF]', '') : null;
+          
           return (
             <div
-            key={message.id}
-            className={`flex ${message.senderId === (user._id || user.id) ? 'justify-end' : 'justify-start'}`}
-          >
-            <div className={`max-w-xs lg:max-w-md ${message.senderId === (user._id || user.id) ? 'order-2' : 'order-1'} relative`}>
-              {/* Right-click context menu for own messages only */}
-              {message.senderId === (user._id || user.id) ? (
-                <DropdownMenu>
-                  <DropdownMenuTrigger asChild>
-                    <div
-                      className={`rounded-2xl px-4 py-3 shadow-elegant cursor-pointer ${
-                        message.senderId === (user._id || user.id)
-                          ? 'bg-chat-bubble-sent text-chat-bubble-sent-foreground ml-4'
-                          : 'bg-chat-bubble-received text-chat-bubble-received-foreground mr-4'
-                      }`}
-                      onContextMenu={(e) => {
-                        e.preventDefault();
-                        e.currentTarget.click();
-                      }}
-                    >
-                      <div className="space-y-2">
-                        <p className="text-sm leading-relaxed">
-                          {(() => {
-                            console.log(`🖼️ Displaying message ${message.id}: original="${message.originalText}", translated="${message.translatedText}", showOriginal=${showOriginal[message.id]}`);
-                            return showOriginal[message.id] 
-                              ? message.originalText 
-                              : (message.translatedText || message.originalText);
-                          })()}
-                        </p>
-                        
-                        {message.translatedText && message.translatedText !== message.originalText && (
-                          <div className="flex items-center justify-between text-xs opacity-70">
-                            <div className="flex items-center space-x-1">
-                              <Globe className="h-3 w-3" />
-                              <span>
-                                {showOriginal[message.id] 
-                                  ? `Original (${getLanguageName(message.sourceLang)})`
-                                  : `Translated from ${getLanguageName(message.sourceLang)}`
-                                }
-                              </span>
-                            </div>
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              className="h-auto p-0 text-xs opacity-70 hover:opacity-100"
-                              onClick={(e) => {
-                                e.stopPropagation();
-                                toggleOriginal(message.id);
-                              }}
-                            >
-                              {showOriginal[message.id] ? (
-                                <><EyeOff className="h-3 w-3 mr-1" />Hide</>
-                              ) : (
-                                <><Eye className="h-3 w-3 mr-1" />Original</>
-                              )}
-                            </Button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </DropdownMenuTrigger>
-                  <DropdownMenuContent align="end">
-                    <DropdownMenuItem 
-                      onClick={() => handleDeleteMessage(message.id)}
-                      className="text-destructive focus:text-destructive"
-                    >
-                      <Trash2 className="h-4 w-4 mr-2" />
-                      Delete Message
-                    </DropdownMenuItem>
-                  </DropdownMenuContent>
-                </DropdownMenu>
-              ) : (
-                <div
-                  className={`rounded-2xl px-4 py-3 shadow-elegant ${
-                    message.senderId === (user._id || user.id)
-                      ? 'bg-chat-bubble-sent text-chat-bubble-sent-foreground ml-4'
-                      : 'bg-chat-bubble-received text-chat-bubble-received-foreground mr-4'
-                  }`}
-                >
-                  <div className="space-y-2">
-                    <p className="text-sm leading-relaxed">
-                      {showOriginal[message.id] 
-                        ? message.originalText 
-                        : (message.translatedText || message.originalText)
-                      }
+              key={message.id}
+              className={`flex ${isOwn ? 'justify-end' : 'justify-start'} mb-4`}
+            >
+              <div
+                className={`max-w-xs lg:max-w-md px-4 py-2 rounded-lg ${
+                  isOwn
+                    ? 'bg-primary text-primary-foreground'
+                    : 'bg-muted text-muted-foreground'
+                }`}
+              >
+                {isGif ? (
+                  <div className="rounded-lg overflow-hidden">
+                    <img 
+                      src={gifUrl} 
+                      alt="GIF" 
+                      className="max-w-full h-auto rounded-lg"
+                      style={{ maxHeight: '200px' }}
+                    />
+                  </div>
+                ) : (
+                  <div>
+                    <p className="text-sm whitespace-pre-wrap break-words">
+                      {messageContent}
                     </p>
-                    
                     {message.translatedText && message.translatedText !== message.originalText && (
-                      <div className="flex items-center justify-between text-xs opacity-70">
-                        <div className="flex items-center space-x-1">
-                          <Globe className="h-3 w-3" />
-                          <span>
-                            {showOriginal[message.id] 
-                              ? `Original (${getLanguageName(message.sourceLang)})`
-                              : `Translated from ${getLanguageName(message.sourceLang)}`
-                            }
+                      <div className="mt-2 pt-2 border-t border-border/20">
+                        <div className="flex items-center justify-between">
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => toggleOriginal(message.id)}
+                            className="h-auto p-1 text-xs opacity-70 hover:opacity-100"
+                          >
+                            <Globe className="h-3 w-3 mr-1" />
+                            {showOriginal[message.id] ? 'Show Translation' : 'Show Original'}
+                          </Button>
+                          <span className="text-xs opacity-50">
+                            {message.sourceLang} → {message.targetLang}
                           </span>
                         </div>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-auto p-0 text-xs opacity-70 hover:opacity-100"
-                          onClick={() => toggleOriginal(message.id)}
-                        >
-                          {showOriginal[message.id] ? (
-                            <><EyeOff className="h-3 w-3 mr-1" />Hide</>
-                          ) : (
-                            <><Eye className="h-3 w-3 mr-1" />Original</>
-                          )}
-                        </Button>
                       </div>
                     )}
                   </div>
-                </div>
-              )}
-              
-              <div className={`text-xs text-muted-foreground mt-1 ${
-                message.senderId === (user._id || user.id) ? 'text-right' : 'text-left'
-              }`}>
-                {formatTime(message.createdAt)}
-                {message.senderId === (user._id || user.id) && (
-                  <span className="ml-2">
-                    {message.status === 'sent' && '✓'}
-                    {message.status === 'delivered' && '✓✓'}
-                    {message.status === 'read' && <span className="text-primary">✓✓</span>}
-                  </span>
                 )}
+                <div className="flex items-center justify-between mt-2">
+                  <span className="text-xs opacity-50">
+                    {formatTime(message.createdAt)}
+                  </span>
+                  {isOwn && (
+                    <div className="flex items-center space-x-1">
+                      {message.status === 'read' && <Eye className="h-3 w-3 text-blue-500" />}
+                      {message.status === 'delivered' && <EyeOff className="h-3 w-3 text-gray-400" />}
+                      {message.status === 'sent' && <div className="h-3 w-3 rounded-full bg-gray-400" />}
+                    </div>
+                  )}
+                </div>
               </div>
             </div>
-          </div>
           );
         })}
         
