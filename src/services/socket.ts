@@ -118,23 +118,48 @@ class SocketService {
   }
 
   // Message events
-  sendMessage(conversationId: string, text: string, sourceLang: string, targetLang: string, receiverId: string) {
-    if (this.socket) {
-      console.log('🔌 Emitting sendMessage with data:', {
-        conversationId,
-        originalText: text,
-        sourceLang,
-        targetLang,
-        receiverId
-      });
-      this.socket.emit('sendMessage', {
-        conversationId,
-        originalText: text, // Backend expects 'originalText', not 'text'
-        sourceLang,
-        targetLang,
-        receiverId
-      });
+  sendMessage(conversationId: string, receiverId: string, originalText: string, sourceLang: string = 'en', targetLang?: string) {
+    if (!this.socket) {
+      console.error('Socket not connected');
+      return;
     }
+    
+    console.log('🔥 FRONTEND: Sending message via socket:', {
+      conversationId,
+      receiverId,
+      originalText,
+      sourceLang,
+      targetLang
+    });
+    
+    this.socket.emit('sendMessage', {
+      conversationId,
+      receiverId,
+      originalText,
+      sourceLang,
+      targetLang
+    });
+  }
+
+  sendMessageToUser(receiverMobile: string, originalText: string, sourceLang: string = 'en', targetLang?: string) {
+    if (!this.socket) {
+      console.error('Socket not connected');
+      return;
+    }
+    
+    console.log('🔥 FRONTEND: Sending message to user by mobile:', {
+      receiverMobile,
+      originalText,
+      sourceLang,
+      targetLang
+    });
+    
+    this.socket.emit('sendMessageToUser', {
+      receiverMobile,
+      originalText,
+      sourceLang,
+      targetLang
+    });
   }
 
   onNewMessage(callback: (message: SocketMessage) => void) {
@@ -312,6 +337,30 @@ class SocketService {
     if (this.socket) {
       this.socket.off('clearConversationError');
       this.socket.on('clearConversationError', callback);
+    }
+  }
+
+  onNewConversationMessage(callback: (data: any) => void) {
+    if (this.socket) {
+      this.socket.on('newConversationMessage', callback);
+    }
+  }
+
+  onMessageToUserSent(callback: (data: any) => void) {
+    if (this.socket) {
+      this.socket.on('messageToUserSent', callback);
+    }
+  }
+
+  offNewConversationMessage() {
+    if (this.socket) {
+      this.socket.off('newConversationMessage');
+    }
+  }
+
+  offMessageToUserSent() {
+    if (this.socket) {
+      this.socket.off('messageToUserSent');
     }
   }
 

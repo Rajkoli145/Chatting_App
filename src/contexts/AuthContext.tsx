@@ -1,4 +1,3 @@
-
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { apiService, User } from '@/services/api';
 import socketService from '@/services/socket';
@@ -87,6 +86,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       console.log('Auth: User language:', response.user?.preferredLanguage);
       console.log('Auth: Full response object:', JSON.stringify(response, null, 2));
       
+      // Clear any stored conversation data for fresh login experience
+      localStorage.removeItem('selectedConversationId');
+      
       // Store user data in localStorage as well for persistence
       localStorage.setItem('user', JSON.stringify(response.user));
       setUser(response.user);
@@ -94,6 +96,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Connect to socket
       socketService.connect(response.accessToken);
       console.log('Auth: Socket connected after login');
+      console.log('Auth: Cleared previous conversation data for fresh login');
     } catch (error: any) {
       console.error('Auth: Login failed:', error);
       

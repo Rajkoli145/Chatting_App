@@ -47,6 +47,7 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
     return () => {
       // Clean up specific listeners when component unmounts
       socketService.offUnreadCounts();
+      socketService.offNewConversationMessage();
     };
   }, []);
   
@@ -65,6 +66,12 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
       
       setupUnreadCountTracking();
       const cleanupOnlineTracking = setupOnlineStatusTracking();
+      
+      // Load conversations when user is authenticated
+      loadConversations();
+      
+      // Setup new conversation message notifications
+      setupNewConversationNotifications();
       
       // Ensure WebSocket connection and force status sync
       setTimeout(() => {
@@ -91,27 +98,6 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
       };
     }
   }, [user]);
-
-  // Separate effect to ensure online status updates are applied to conversations
-  useEffect(() => {
-    console.log('🔄 Updating conversation online status...');
-    console.log('🔄 Current online users:', Array.from(onlineUsers));
-    
-    setConversations(prev => prev.map(conv => {
-      // Handle both _id and id formats for user identification
-      const userId = (conv.user as any)._id || conv.user.id;
-      const isOnline = onlineUsers.has(userId);
-      console.log(`🔄 User ${conv.user.name} (ID: ${userId}) - Online: ${isOnline}`);
-      console.log(`🔄 Checking against online users:`, Array.from(onlineUsers));
-      return {
-        ...conv,
-        user: {
-          ...conv.user,
-          isOnline: isOnline
-        }
-      };
-    }));
-  }, [onlineUsers]);
 
   const setupUnreadCountTracking = () => {
     console.log('📊 Setting up unread count tracking...');
@@ -205,6 +191,94 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
       clearInterval(refreshInterval);
     };
   };
+
+  const setupNewConversationNotifications = () => {
+    console.log('🔔 Setting up new conversation message notifications...');
+    
+    socketService.onNewConversationMessage((data) => {
+      console.log('🔔 Received new conversation message notification:', data);
+      
+      const { message, sender, conversation, isNewConversation } = data;
+      
+      // Show toast notification
+      toast({
+        title: isNewConversation ? 'New Message from Unknown User' : 'New Message',
+        description: `${sender.name} (${sender.mobile}): ${message.originalText}`,
+        duration: 5000,
+      });
+      
+      // If it's a new conversation, add it to the conversations list
+      if (isNewConversation) {
+        const newConversation: Conversation = {
+          id: conversation.id,
+          user: {
+            id: sender.id,
+            name: sender.name,
+            preferredLanguage: sender.preferredLanguage,
+            isOnline: onlineUsers.has(sender.id)
+          },
+          lastMessage: {
+            text: message.originalText,
+            timestamp: new Date(message.timestamp),
+            isOwn: false,
+            isTranslated: message.isTranslated || false
+          },
+          unreadCount: 1
+        };
+        
+        setConversations(prev => [newConversation, ...prev]);
+        
+        // Update unread counts
+        setUnreadCounts(prev => ({
+          ...prev,
+          [conversation.id]: 1
+        }));
+      } else {
+        // Update existing conversation's last message
+        setConversations(prev => prev.map(conv => {
+          if (conv.id === conversation.id) {
+            return {
+              ...conv,
+              lastMessage: {
+                text: message.originalText,
+                timestamp: new Date(message.timestamp),
+                isOwn: false,
+                isTranslated: message.isTranslated || false
+              }
+            };
+          }
+          return conv;
+        }));
+        
+        // Update unread count
+        setUnreadCounts(prev => ({
+          ...prev,
+          [conversation.id]: (prev[conversation.id] || 0) + 1
+        }));
+      }
+    });
+  };
+
+  // Separate effect to ensure online status updates are applied to conversations
+  useEffect(() => {
+    console.log('🔄 Updating conversation online status...');
+    console.log('🔄 Current online users:', Array.from(onlineUsers));
+    
+    setConversations(prev => prev.map(conv => {
+      // Handle both _id and id formats for user identification
+      const userId = (conv.user as any)._id || conv.user.id;
+      const isOnline = onlineUsers.has(userId);
+      console.log(`🔄 User ${conv.user.name} (ID: ${userId}) - Online: ${isOnline}`);
+      console.log(`🔄 Checking against online users:`, Array.from(onlineUsers));
+      return {
+        ...conv,
+        user: {
+          ...conv.user,
+          isOnline: isOnline
+        }
+      };
+    }));
+  }, [onlineUsers]);
 
   // Listen for new messages to update unread counts
   useEffect(() => {

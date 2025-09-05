@@ -115,4 +115,73 @@ export class ConversationsController {
       throw error;
     }
   }
+
+  @Post('send-to-user')
+  @UseGuards(JwtAuthGuard)
+  async sendMessageToUser(
+    @Body() body: {
+      receiverMobile: string;
+      originalText: string;
+      sourceLang: string;
+      targetLang?: string;
+    },
+    @Request() req,
+  ) {
+    const senderId = req.user.sub;
+    console.log('📤 Sending message to user by mobile:', body.receiverMobile, 'from:', senderId);
+    
+    try {
+      // Find receiver by mobile number
+      const User = this.messagesService.getUserModel();
+      const receiver = await User.findOne({ mobile: body.receiverMobile });
+      
+      if (!receiver) {
+        throw new Error('User not found with mobile number: ' + body.receiverMobile);
+      }
+
+      const receiverId = receiver._id.toString();
+      
+      // Check if conversation exists, create if not
+      let conversation = await this.conversationsService.createConversation(senderId, receiverId);
+      
+      // Save message to database
+      const savedMessage = await this.messagesService.create(
+        conversation.id,
+        senderId,
+        receiverId,
+        body.originalText,
+        body.sourceLang,
+        body.targetLang
+      );
+
+      // Send notification to receiver about new message from unknown user
+      this.chatGateway.server.to(`user_${receiverId}`).emit('newConversationMessage', {
+        message: {
+          id: savedMessage._id,
+          conversationId: savedMessage.conversationId,
+          senderId: savedMessage.senderId,
+          receiverId: savedMessage.receiverId,
+          originalText: savedMessage.originalText,
+          translatedText: savedMessage.translatedText,
+          sourceLang: savedMessage.sourceLang,
+          targetLang: savedMessage.targetLang,
+          timestamp: (savedMessage as any).createdAt,
+          status: savedMessage.status,
+        },
+        conversation: conversation,
+        isNewConversation: true
+      });
+
+      console.log('📡 New conversation message notification sent to:', receiverId);
+
+      return {
+        success: true,
+        message: 'Message sent successfully',
+        conversationId: conversation.id
+      };
+    } catch (error) {
+      console.error('❌ Error sending message to user:', error);
+      throw error;
+    }
+  }
 }

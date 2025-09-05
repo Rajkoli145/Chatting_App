@@ -221,6 +221,115 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     }
   }
 
+  @SubscribeMessage('sendMessageToUser')
+  async handleSendMessageToUser(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() data: {
+      receiverMobile: string;
+      originalText: string;
+      sourceLang: string;
+      targetLang?: string;
+    },
+  ) {
+    this.logger.log('🔥 BACKEND: sendMessageToUser event received!');
+    this.logger.log('🔥 BACKEND: Data received:', JSON.stringify(data, null, 2));
+    
+    try {
+      const token = client.handshake.auth.token;
+      const payload = this.jwtService.verify(token);
+      const senderId = payload.sub;
+
+      // Find receiver by mobile number
+      const User = this.messagesService.getUserModel();
+      const receiver = await User.findOne({ mobile: data.receiverMobile });
+      
+      if (!receiver) {
+        client.emit('messageError', { error: 'User not found with mobile number: ' + data.receiverMobile });
+        return;
+      }
+
+      const receiverId = receiver._id.toString();
+      
+      // Get sender info
+      const sender = await User.findById(senderId);
+      
+      // Check if conversation exists
+      const ConversationModel = this.messagesService.getConversationModel();
+      let conversation = await ConversationModel.findOne({
+        participants: { $all: [senderId, receiverId] }
+      });
+
+      let isNewConversation = false;
+      
+      // Create conversation if it doesn't exist
+      if (!conversation) {
+        conversation = new ConversationModel({
+          participants: [senderId, receiverId]
+        });
+        await conversation.save();
+        isNewConversation = true;
+        this.logger.log(`💬 Created new conversation between ${senderId} and ${receiverId}`);
+      }
+
+      // Save message to database
+      const savedMessage = await this.messagesService.create(
+        conversation._id.toString(),
+        senderId,
+        receiverId,
+        data.originalText,
+        data.sourceLang,
+        data.targetLang,
+      );
+
+      // Send notification to receiver about new message
+      const notificationData = {
+        message: {
+          id: savedMessage._id,
+          conversationId: savedMessage.conversationId,
+          senderId: savedMessage.senderId,
+          receiverId: savedMessage.receiverId,
+          originalText: savedMessage.originalText,
+          translatedText: savedMessage.translatedText,
+          sourceLang: savedMessage.sourceLang,
+          targetLang: savedMessage.targetLang,
+          timestamp: (savedMessage as any).createdAt,
+          status: savedMessage.status,
+        },
+        sender: {
+          id: sender._id,
+          name: sender.name,
+          mobile: sender.mobile,
+          preferredLanguage: sender.preferredLanguage
+        },
+        conversation: {
+          id: conversation._id,
+          participants: conversation.participants
+        },
+        isNewConversation: isNewConversation
+      };
+
+      // Send to receiver's user room
+      this.server.to(`user_${receiverId}`).emit('newConversationMessage', notificationData);
+      
+      // Also send regular message for real-time chat if receiver is in conversation
+      this.server.to(`conversation_${conversation._id}`).emit('newMessage', notificationData.message);
+      
+      // Send confirmation to sender
+      client.emit('messageToUserSent', {
+        success: true,
+        conversationId: conversation._id,
+        receiverName: receiver.name,
+        isNewConversation: isNewConversation
+      });
+
+      this.logger.log(`📡 Message notification sent to user ${receiverId} (${receiver.name})`);
+      
+    } catch (error) {
+      this.logger.error('Error sending message to user:', error);
+      client.emit('messageError', { error: 'Failed to send message to user' });
+    }
+  }
+
   // Send personalized messages immediately to each participant
   private async sendPersonalizedMessages(savedMessage: any, participants: any[]) {
     const User = this.messagesService.getUserModel();
