@@ -62,8 +62,12 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Add event listener debugging
       this.logger.log(`🔥 Setting up event listeners for socket ${client.id}`);
       
-      // Notify user is online (broadcast to all clients)
+      // Notify user is online (broadcast to all clients except the connecting one)
+      console.log(`🟢 Broadcasting user ${userId} as ONLINE`);
       this.server.emit('userStatusChanged', { userId, isOnline: true });
+      
+      // Also send to the connecting client
+      client.emit('userStatusChanged', { userId, isOnline: true });
       
     } catch (error) {
       this.logger.error('Chat connection failed:', error);
@@ -124,6 +128,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   @SubscribeMessage('getOnlineUsers')
   async handleGetOnlineUsers(@ConnectedSocket() client: Socket) {
     const onlineUserIds = Array.from(this.connectedUsers.keys());
+    console.log(`📋 Frontend requested online users, sending:`, onlineUserIds);
     client.emit('onlineUsers', onlineUserIds);
   }
 
@@ -152,6 +157,7 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           this.connectedUsers.delete(userId);
           
           // Notify user is offline
+          console.log(`🔴 Broadcasting user ${userId} as OFFLINE`);
           this.server.emit('userStatusChanged', { userId, isOnline: false });
           this.logger.log(`💬 User ${userId} is now offline`);
         } else {
@@ -249,21 +255,24 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
             isTranslated: false
           };
         } else {
-          // Receiver gets basic translation (will be refined in background)
+          // Receiver gets message translated to their preferred language
           let basicTranslation = savedMessage.originalText;
           
-          // Only translate if languages are different
-          if (senderPreferredLang !== participantLang) {
+          // Always translate if source language is different from participant's preferred language
+          if (savedMessage.sourceLang !== participantLang) {
             try {
               basicTranslation = await TranslationService.translate(
                 savedMessage.originalText,
                 savedMessage.sourceLang,
                 participantLang
               );
+              this.logger.log(`🌐 Immediate translation: "${savedMessage.originalText}" → "${basicTranslation}" (${savedMessage.sourceLang} → ${participantLang})`);
             } catch (error) {
               this.logger.error(`Basic translation failed for ${participantId}:`, error);
-              // Fall back to original text
+              basicTranslation = savedMessage.originalText; // Fall back to original text
             }
+          } else {
+            this.logger.log(`🌐 No translation needed for ${participantId}: message already in preferred language (${participantLang})`);
           }
           
           messageToSend = {
@@ -281,9 +290,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
           };
         }
         
-        // Send to user's personal room AND conversation room
+        // Send to user's personal room only (avoid duplicate conversation room messages)
         this.server.to(`user_${participantId}`).emit('newMessage', messageToSend);
-        this.server.to(`conversation_${savedMessage.conversationId}`).emit('newMessage', messageToSend);
         
         // Update unread counts for receiver (not sender)
         if (!isSender) {
@@ -313,8 +321,8 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
         const participant = await User.findById(participantId);
         const participantLang = participant?.preferredLanguage || 'en';
         
-        // Skip if same language as sender's preferred language or if it's the sender
-        if (participantLang === senderPreferredLang || participantId.toString() === savedMessage.senderId.toString()) {
+        // Skip if same language as source language or if it's the sender
+        if (participantLang === savedMessage.sourceLang || participantId.toString() === savedMessage.senderId.toString()) {
           this.logger.log(`🌐 Skipping translation for ${participantId}: same language (${participantLang}) or sender`);
           return;
         }

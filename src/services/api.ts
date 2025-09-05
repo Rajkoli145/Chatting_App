@@ -42,6 +42,9 @@ interface Message {
   targetLang?: string;
   status: 'sent' | 'delivered' | 'read';
   createdAt: string;
+  isTranslated?: boolean;
+  timestamp?: Date;
+  isOwn?: boolean;
 }
 
 class ApiService {
@@ -200,9 +203,14 @@ class ApiService {
     return this.request<Conversation[]>(`/conversations`);
   }
 
-  async getMessages(conversationId: string, cursor?: string) {
-    console.log('API: Getting messages for conversation:', conversationId, 'for authenticated user');
-    const query = cursor ? `?cursor=${cursor}` : '';
+  async getMessages(conversationId: string, cursor?: string, targetLanguage?: string) {
+    console.log('API: Getting messages for conversation:', conversationId, 'for authenticated user', targetLanguage ? `with target language: ${targetLanguage}` : '');
+    
+    const params = new URLSearchParams();
+    if (cursor) params.append('cursor', cursor);
+    if (targetLanguage) params.append('targetLang', targetLanguage);
+    const query = params.toString() ? `?${params.toString()}` : '';
+    
     return this.request<{ messages: Message[]; hasMore: boolean }>(`/conversations/${conversationId}/messages${query}`);
   }
 

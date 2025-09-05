@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Param, UseGuards, Request } from '@nestjs/common';
+import { Controller, Get, Post, Body, UseGuards, Request, Param, Query } from '@nestjs/common';
 import { JwtAuthGuard } from '../auth/jwt-auth.guard';
 import { ConversationsService } from './conversations.service';
 import { MessagesService } from '../messages/messages.service';
@@ -32,13 +32,16 @@ export class ConversationsController {
 
   @Get(':id/messages')
   @UseGuards(JwtAuthGuard)
-  async getMessages(@Request() req, @Param('id') conversationId: string) {
+  async getMessages(
+    @Request() req, 
+    @Param('id') conversationId: string,
+    @Query('targetLang') targetLang?: string
+  ) {
     try {
       const userId = req.user.sub; // Get user ID from JWT token
-      console.log('💬 Getting messages for conversation:', conversationId, 'authenticated user:', userId);
+      console.log('💬 Getting messages for conversation:', conversationId, 'authenticated user:', userId, 'targetLang:', targetLang);
       
-      const messages = await this.conversationsService.getConversationMessages(conversationId, userId);
-      console.log('💬 Messages found:', messages?.length || 0);
+      const { messages } = await this.messagesService.findByConversationId(conversationId, userId, undefined, 50, targetLang);
       
       return messages;
     } catch (error) {

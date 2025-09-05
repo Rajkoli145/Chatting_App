@@ -1,7 +1,7 @@
 
 import React, { createContext, useContext, useState, useEffect, ReactNode } from 'react';
 import { apiService, User } from '@/services/api';
-import { socketService } from '@/services/socket';
+import socketService from '@/services/socket';
 
 interface AuthContextType {
   user: User | null;
@@ -27,28 +27,36 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const token = localStorage.getItem('authToken');
       const storedUser = localStorage.getItem('user');
       console.log('Checking auth on startup, token:', token ? 'exists' : 'not found');
-      console.log('Stored user data:', storedUser);
       
       if (token && storedUser) {
         try {
-          // Use stored user data immediately to prevent logout on refresh
-          const userData = JSON.parse(storedUser);
-          console.log('Restoring user from localStorage:', userData);
-          setUser(userData);
+          const user = JSON.parse(storedUser);
+          setUser(user);
           
-          // Set the token in apiService for authenticated requests
-          apiService.setAuthToken(token);
-          
-          // Connect to socket
+          // Connect to WebSocket when authenticated
           socketService.connect(token);
-          console.log('Socket connected on startup');
           
-          // Optionally fetch fresh data in background (don't await)
+          // Ensure proper cleanup on page unload and visibility changes
+          const handleBeforeUnload = () => {
+            console.log('🔌 Page unloading - disconnecting WebSocket...');
+            socketService.disconnect();
+          };
+          
+          const handleVisibilityChange = () => {
+            if (document.visibilityState === 'visible') {
+              console.log('🔄 Page became visible - ensuring WebSocket connection...');
+              socketService.ensureConnection();
+            }
+          };
+          
+          window.addEventListener('beforeunload', handleBeforeUnload);
+          document.addEventListener('visibilitychange', handleVisibilityChange);
+          
+          // Fetch fresh user data in background
           apiService.getCurrentUser()
-            .then(freshData => {
-              console.log('Fresh user data retrieved:', freshData);
-              setUser(freshData);
-              localStorage.setItem('user', JSON.stringify(freshData));
+            .then(freshUser => {
+              setUser(freshUser);
+              localStorage.setItem('user', JSON.stringify(freshUser));
             })
             .catch(error => {
               console.error('Background user fetch failed:', error);

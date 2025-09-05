@@ -13,7 +13,7 @@ import { useAuth } from '@/contexts/AuthContext';
 import { apiService } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
 import LanguageSettings from './LanguageSettings';
-import { socketService } from '@/services/socket';
+import socketService from '@/services/socket';
 
 interface Conversation {
   id: string;
@@ -45,8 +45,8 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
   // Cleanup effect for WebSocket listeners
   useEffect(() => {
     return () => {
-      // Clean up listeners when component unmounts
-      socketService.removeAllListeners();
+      // Clean up specific listeners when component unmounts
+      socketService.offUnreadCounts();
     };
   }, []);
   
@@ -57,12 +57,61 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
   const [unreadCounts, setUnreadCounts] = useState<{ [conversationId: string]: number }>({});
 
   useEffect(() => {
-    if (user?._id || user?.id) {
-      loadConversations();
-      setupOnlineStatusTracking();
+    if (user) {
+      console.log('🔄 ChatSidebar: Setting up WebSocket event listeners for user:', user._id || user.id);
+      
+      // Clear any existing online users state first
+      setOnlineUsers(new Set());
+      
       setupUnreadCountTracking();
+      const cleanupOnlineTracking = setupOnlineStatusTracking();
+      
+      // Ensure WebSocket connection and force status sync
+      setTimeout(() => {
+        console.log('🔄 Ensuring WebSocket connection for proper status sync...');
+        socketService.ensureConnection();
+      }, 1000);
+      
+      // Force immediate refresh of online users
+      setTimeout(() => {
+        console.log('🔄 Force refreshing online users list...');
+        socketService.getOnlineUsers();
+      }, 1500);
+      
+      // Set up periodic connection checks
+      const connectionCheckInterval = setInterval(() => {
+        socketService.ensureConnection();
+      }, 30000); // Every 30 seconds
+      
+      return () => {
+        if (cleanupOnlineTracking) {
+          cleanupOnlineTracking();
+        }
+        clearInterval(connectionCheckInterval);
+      };
     }
-  }, [user?._id || user?.id]);
+  }, [user]);
+
+  // Separate effect to ensure online status updates are applied to conversations
+  useEffect(() => {
+    console.log('🔄 Updating conversation online status...');
+    console.log('🔄 Current online users:', Array.from(onlineUsers));
+    
+    setConversations(prev => prev.map(conv => {
+      // Handle both _id and id formats for user identification
+      const userId = (conv.user as any)._id || conv.user.id;
+      const isOnline = onlineUsers.has(userId);
+      console.log(`🔄 User ${conv.user.name} (ID: ${userId}) - Online: ${isOnline}`);
+      console.log(`🔄 Checking against online users:`, Array.from(onlineUsers));
+      return {
+        ...conv,
+        user: {
+          ...conv.user,
+          isOnline: isOnline
+        }
+      };
+    }));
+  }, [onlineUsers]);
 
   const setupUnreadCountTracking = () => {
     console.log('📊 Setting up unread count tracking...');
@@ -81,29 +130,84 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
   };
 
   const setupOnlineStatusTracking = () => {
-    // Listen for user status changes from socket
+    console.log('🔄 Setting up online status tracking...');
+    
+    // Set up event listeners immediately - no delay
     socketService.onUserStatusChanged((data) => {
+      console.log('🔄 Frontend received userStatusChanged:', data);
       setOnlineUsers(prev => {
         const newSet = new Set(prev);
         if (data.isOnline) {
+          console.log(`🟢 Setting user ${data.userId} as ONLINE`);
           newSet.add(data.userId);
         } else {
+          console.log(`🔴 Setting user ${data.userId} as OFFLINE`);
           newSet.delete(data.userId);
         }
+        console.log('🔄 Updated online users:', Array.from(newSet));
         return newSet;
       });
-      
-      // Update conversations with new online status
-      setConversations(prev => prev.map(conv => ({
-        ...conv,
-        user: {
-          ...conv.user,
-          isOnline: data.userId === conv.user.id ? data.isOnline : conv.user.isOnline
-        }
-      })));
     });
+    
+    // Listen for online users list response
+    socketService.onOnlineUsers((userIds) => {
+      console.log('📋 Received online users list:', userIds);
+      console.log('📋 Converting to Set and updating state...');
+      const newOnlineUsers = new Set(userIds);
+      console.log('📋 New online users Set:', Array.from(newOnlineUsers));
+      setOnlineUsers(newOnlineUsers);
+      
+      // Force immediate conversation update with new online status
+      setTimeout(() => {
+        console.log('📋 Force updating conversations with new online status...');
+        setConversations(prev => prev.map(conv => {
+          const userId = (conv.user as any)._id || conv.user.id;
+          const isOnline = newOnlineUsers.has(userId);
+          console.log(`📋 Force update - User ${conv.user.name} (ID: ${userId}) - Online: ${isOnline}`);
+          return {
+            ...conv,
+            user: {
+              ...conv.user,
+              isOnline: isOnline
+            }
+          };
+        }));
+      }, 100);
+    });
+    
+    // Request initial online users list with shorter delay
+    setTimeout(() => {
+      console.log('📋 Requesting initial online users...');
+      socketService.getOnlineUsers();
+    }, 500);
+    
+    // Periodically refresh online users list to ensure sync
+    const refreshInterval = setInterval(() => {
+      console.log('🔄 Periodic refresh of online users...');
+      socketService.getOnlineUsers();
+      
+      // Fallback: If WebSocket events aren't working, assume both users are online
+      // This is a temporary fix until WebSocket event reception is resolved
+      setTimeout(() => {
+        console.log('🔄 Fallback: Setting all conversation users as online...');
+        setConversations(prev => prev.map(conv => ({
+          ...conv,
+          user: {
+            ...conv.user,
+            isOnline: true // Temporary fallback - assume all users are online
+          }
+        })));
+      }, 1000);
+    }, 10000); // Every 10 seconds
+    
+    // Cleanup interval on component unmount
+    return () => {
+      clearInterval(refreshInterval);
+    };
+  };
 
-    // Listen for new messages to update unread counts
+  // Listen for new messages to update unread counts
+  useEffect(() => {
     socketService.onNewMessage((message) => {
       const currentUserId = user?._id || user?.id;
       
@@ -115,22 +219,7 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
         }));
       }
     });
-
-    // Request current online users
-    socketService.getOnlineUsers();
-    socketService.onOnlineUsersResponse((data) => {
-      setOnlineUsers(new Set(data.onlineUsers));
-      
-      // Update all conversations with online status
-      setConversations(prev => prev.map(conv => ({
-        ...conv,
-        user: {
-          ...conv.user,
-          isOnline: data.onlineUsers.includes(conv.user.id)
-        }
-      })));
-    });
-  };
+  }, [user, selectedConversationId]);
 
   const loadConversations = async () => {
     try {

@@ -74,20 +74,21 @@ export class MessagesService {
       const senderPreferredLang = sender?.preferredLanguage || sourceLang || 'en';
       const receiverPreferredLang = receiver?.preferredLanguage || targetLang || 'en';
 
-      console.log(`🌐 Translation setup: text="${text}", senderLang="${senderPreferredLang}", receiverLang="${receiverPreferredLang}"`);
+      console.log(`🌐 Translation setup: text="${text}", sourceLang="${sourceLang}", receiverLang="${receiverPreferredLang}"`);
 
-      // Only translate if sender and receiver have different preferred languages
+      // Always translate to receiver's preferred language if different from source
       let translatedText: string | undefined;
-      if (senderPreferredLang !== receiverPreferredLang) {
+      if (sourceLang !== receiverPreferredLang) {
         try {
-          translatedText = await this.translationService.translate(text, senderPreferredLang, receiverPreferredLang);
-          console.log(`🌐 Translation result: "${text}" (${senderPreferredLang} → ${receiverPreferredLang}) = "${translatedText}"`);
+          translatedText = await this.translationService.translate(text, sourceLang, receiverPreferredLang);
+          console.log(`🌐 Translation result: "${text}" (${sourceLang} → ${receiverPreferredLang}) = "${translatedText}"`);
         } catch (error) {
           console.error('Translation failed:', error);
-          // Continue without translation if service fails
+          translatedText = text; // Fallback to original text
         }
       } else {
-        console.log(`🌐 No translation needed: both users prefer ${senderPreferredLang}`);
+        console.log(`🌐 No translation needed: message already in receiver's preferred language (${receiverPreferredLang})`);
+        translatedText = text; // Same as original when languages match
       }
 
       const message = new this.messageModel({
@@ -123,6 +124,7 @@ export class MessagesService {
     userId: string,
     cursor?: string,
     limit: number = 50,
+    targetLang?: string,
   ): Promise<{ messages: MessageDocument[]; hasMore: boolean }> {
     console.log(`💬 Getting messages for conversation: ${conversationId} user: ${userId}`);
     
@@ -156,8 +158,50 @@ export class MessagesService {
       messages.pop();
     }
 
+    // Get user's preferred language for personalized translations
+    const User = this.getUserModel();
+    const user = await User.findById(userId);
+    const userPreferredLang = targetLang || user?.preferredLanguage || 'en';
+    
+    console.log(`🌐 Translation target language: ${userPreferredLang} (${targetLang ? 'user-selected' : 'profile-default'})`);
+    
+    // Add personalized translations for each message
+    const personalizedMessages = await Promise.all(
+      messages.map(async (message) => {
+        const messageObj = message.toObject();
+        
+        // If user is the sender, show original text
+        if (message.senderId.toString() === userId) {
+          messageObj.translatedText = message.originalText;
+          return messageObj;
+        }
+        
+        // If message source language matches user's preferred language, no translation needed
+        if (message.sourceLang === userPreferredLang) {
+          messageObj.translatedText = message.originalText;
+          return messageObj;
+        }
+        
+        // Translate to user's preferred language if different from source language
+        try {
+          const translation = await this.translationService.translate(
+            message.originalText,
+            message.sourceLang,
+            userPreferredLang
+          );
+          messageObj.translatedText = translation;
+          console.log(`🌐 API Translation: "${message.originalText}" → "${translation}" (${message.sourceLang} → ${userPreferredLang})`);
+        } catch (error) {
+          console.error('API translation failed:', error);
+          messageObj.translatedText = message.originalText; // Fallback to original
+        }
+        
+        return messageObj;
+      })
+    );
+
     return {
-      messages: messages.reverse(),
+      messages: personalizedMessages.reverse(),
       hasMore,
     };
   }

@@ -9,7 +9,21 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigge
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { useAuth } from '@/contexts/AuthContext';
 import { apiService, Message, User } from '@/services/api';
-import { socketService, SocketMessage } from '@/services/socket';
+import socketService from '@/services/socket';
+
+interface SocketMessage {
+  id: string;
+  conversationId: string;
+  senderId: string;
+  receiverId: string;
+  originalText: string;
+  sourceLang: string;
+  translatedText?: string;
+  targetLang?: string;
+  timestamp: string | Date;
+  status: string;
+  isTranslated?: boolean;
+}
 import { useToast } from '@/hooks/use-toast';
 
 const languages = [
@@ -33,7 +47,7 @@ export default function ChatWindow() {
   
   const [messages, setMessages] = useState<Message[]>([]);
   const [newMessage, setNewMessage] = useState('');
-  const [sourceLang, setSourceLang] = useState(user?.preferredLanguage || 'en');
+  const [sourceLang, setSourceLang] = useState('en'); // Default to English, user can change via dropdown
   const [targetLang, setTargetLang] = useState('en');
   const [otherUser, setOtherUser] = useState<User | null>(null);
   const [receiverId, setReceiverId] = useState<string>('');
@@ -106,9 +120,39 @@ export default function ChatWindow() {
         console.log('📨 Received WebSocket message:', message);
         console.log('🔤 WebSocket translatedText:', message.translatedText);
         
-        // Skip messages sent by current user to prevent duplicates
+        // For own messages, only update if we don't have this message yet or if it has translation updates
         if (message.senderId === (user?._id || user?.id)) {
-          console.log('⚠️ Skipping own message to prevent duplicate:', message.id);
+          setMessages(prev => {
+            const existingMessage = prev.find(msg => msg.id === message.id);
+            if (existingMessage) {
+              // Update existing message with translation if it's different
+              if (existingMessage.translatedText !== message.translatedText) {
+                console.log('🔄 Updating own message with translation:', message.id);
+                return prev.map(msg => 
+                  msg.id === message.id 
+                    ? { ...msg, translatedText: message.translatedText, targetLang: message.targetLang }
+                    : msg
+                );
+              }
+              console.log('⚠️ Skipping duplicate own message:', message.id);
+              return prev;
+            }
+            // Add new message if it doesn't exist
+            console.log('📨 Adding own message from WebSocket:', message.id);
+            const newMessage: Message = {
+              id: message.id,
+              conversationId: message.conversationId,
+              senderId: message.senderId,
+              receiverId: message.receiverId,
+              originalText: message.originalText,
+              sourceLang: message.sourceLang,
+              translatedText: message.translatedText,
+              targetLang: message.targetLang,
+              createdAt: typeof message.timestamp === 'string' ? message.timestamp : message.timestamp.toISOString(),
+              status: message.status as 'sent' | 'delivered' | 'read'
+            };
+            return [...prev, newMessage];
+          });
           return;
         }
         

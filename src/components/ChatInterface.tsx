@@ -1,12 +1,12 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { Send, Globe, Eye, EyeOff, MoreVertical, Phone, Video, Settings } from 'lucide-react';
+import { Send, Globe, Eye, EyeOff, MoreVertical, Phone, Video, Settings, ChevronDown } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/contexts/AuthContext';
-import { socketService } from '@/services/socket';
+import socketService from '@/services/socket';
 import { apiService } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
 import EmojiPicker from '@/components/EmojiPicker';
@@ -54,10 +54,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
   const [newMessage, setNewMessage] = useState<string>('');
   console.log(' newMessage initialized:', newMessage, typeof newMessage);
   const [showTranslations, setShowTranslations] = useState(true);
-  const [showOriginal, setShowOriginal] = useState<{ [key: string]: boolean }>({});
-  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
-  const [messagesLoaded, setMessagesLoaded] = useState(false);
   const [userOnlineStatus, setUserOnlineStatus] = useState<{ [userId: string]: boolean }>({});
+  const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
+  const [showOriginal, setShowOriginal] = useState<{ [messageId: string]: boolean }>({});
+  const [selectedLanguage, setSelectedLanguage] = useState<string>(user?.preferredLanguage || 'en');
+  const [messagesLoaded, setMessagesLoaded] = useState(false);
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Connect to chat WebSocket on mount
@@ -71,6 +72,11 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
       
       // Set up WebSocket listeners
       socketService.onNewMessage((message) => {
+        console.log('🌐 Frontend received message via WebSocket:', message);
+        console.log('🌐 Message originalText:', message.originalText);
+        console.log('🌐 Message translatedText:', message.translatedText);
+        console.log('🌐 Message isTranslated:', message.isTranslated);
+        
         const incomingMessage: Message = {
           ...message,
           id: message.id,
@@ -80,18 +86,44 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
           status: (message.status as 'sending' | 'sent' | 'delivered' | 'read' | 'failed') || 'sent',
         };
         
+        console.log('🌐 Processed message for display:', incomingMessage);
+        
         setMessages(prev => {
-          // Check if message already exists to prevent duplicates
-          const messageExists = prev.some(msg => msg.id === message.id);
-          if (messageExists) {
-            return prev;
-          }
-          
-          // Only add message if it belongs to the current conversation
+          // Only process message if it belongs to the current conversation
           if (message.conversationId !== selectedConversationId) {
             return prev;
           }
           
+          const isOwnMessage = message.senderId === (user?._id || user?.id);
+          
+          // Check if message already exists
+          const existingMessageIndex = prev.findIndex(msg => msg.id === message.id);
+          
+          if (existingMessageIndex !== -1) {
+            // For own messages, don't update with translation data to prevent "Show Original" buttons
+            if (isOwnMessage) {
+              console.log('⚠️ Skipping translation update for own message:', message.id);
+              return prev;
+            }
+            
+            // Update existing message with new translation data (for received messages only)
+            const existingMessage = prev[existingMessageIndex];
+            const updatedMessage = {
+              ...existingMessage,
+              translatedText: message.translatedText || existingMessage.translatedText,
+              targetLang: message.targetLang || existingMessage.targetLang,
+              isTranslated: message.isTranslated !== undefined ? message.isTranslated : existingMessage.isTranslated
+            };
+            
+            console.log('🔄 Updating existing message with translation:', updatedMessage);
+            
+            return prev.map((msg, index) => 
+              index === existingMessageIndex ? updatedMessage : msg
+            );
+          }
+          
+          // Add new message if it doesn't exist
+          console.log('➕ Adding new message:', incomingMessage);
           return [...prev, incomingMessage];
         });
       });
@@ -149,6 +181,14 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
     }
   }, [selectedConversationId, selectedConversation]);
 
+  // Effect to reload messages when selected language changes
+  useEffect(() => {
+    if (selectedConversationId && selectedLanguage) {
+      console.log('🌐 Language changed to:', selectedLanguage, '- reloading messages with new translations');
+      loadMessages();
+    }
+  }, [selectedLanguage]);
+
   // Join conversation when selected and load messages
   useEffect(() => {
     console.log('🔄 Conversation effect triggered:', { selectedConversationId, userId: user?._id || user?.id });
@@ -184,19 +224,25 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
     console.log('📥 Loading messages for conversation:', selectedConversationId);
     
     try {
-      const data = await apiService.getMessages(selectedConversationId);
+      const data = await apiService.getMessages(selectedConversationId, undefined, selectedLanguage);
       console.log('📥 Raw API response:', data);
       
       const messages = Array.isArray(data) ? data : data.messages || [];
       console.log('📥 Extracted messages array:', messages);
       
-      const formattedMessages = messages.map(msg => ({
-        ...msg,
-        id: msg._id || msg.id,
-        createdAt: new Date(msg.createdAt),
-        timestamp: new Date(msg.createdAt),
-        isOwn: msg.senderId === (user?._id || user?.id)
-      }));
+      const formattedMessages = messages.map(msg => {
+        console.log('🌐 Processing message from API:', msg);
+        console.log('🌐 API message originalText:', msg.originalText);
+        console.log('🌐 API message translatedText:', msg.translatedText);
+        
+        return {
+          ...msg,
+          id: msg._id || msg.id,
+          createdAt: new Date(msg.createdAt),
+          timestamp: new Date(msg.createdAt),
+          isOwn: msg.senderId === (user?._id || user?.id)
+        };
+      });
       
       console.log('📥 Formatted messages:', formattedMessages);
       setMessages(formattedMessages);
@@ -355,6 +401,43 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
           </div>
         </div>
         <div className="flex items-center space-x-2">
+          {/* Language Selector */}
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <Button variant="outline" size="sm" className="flex items-center space-x-1">
+                <Globe className="h-4 w-4" />
+                <span className="text-xs">{getLanguageName(selectedLanguage)}</span>
+                <ChevronDown className="h-3 w-3" />
+              </Button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end">
+              <DropdownMenuItem onClick={() => setSelectedLanguage('en')}>
+                <span className="mr-2">🇺🇸</span>
+                English
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSelectedLanguage('hi')}>
+                <span className="mr-2">🇮🇳</span>
+                हिंदी (Hindi)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSelectedLanguage('mr')}>
+                <span className="mr-2">🇮🇳</span>
+                मराठी (Marathi)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSelectedLanguage('zh')}>
+                <span className="mr-2">🇨🇳</span>
+                中文 (Chinese)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSelectedLanguage('es')}>
+                <span className="mr-2">🇪🇸</span>
+                Español (Spanish)
+              </DropdownMenuItem>
+              <DropdownMenuItem onClick={() => setSelectedLanguage('fr')}>
+                <span className="mr-2">🇫🇷</span>
+                Français (French)
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          
           <Button variant="ghost" size="sm">
             <Phone className="h-4 w-4" />
           </Button>

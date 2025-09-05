@@ -11,29 +11,23 @@ interface SocketMessage {
   targetLang?: string;
   timestamp: string | Date;
   status: string;
-}
-
-interface SocketEvents {
-  // Outgoing events
-  'message:send': (data: { conversationId: string; text: string; sourceLang: string; targetLang: string }) => void;
-  'typing:start': (data: { conversationId: string }) => void;
-  'typing:stop': (data: { conversationId: string }) => void;
-  'message:mark-read': (data: { conversationId: string; messageId: string }) => void;
-  
-  // Incoming events
-  'message:new': (data: SocketMessage) => void;
-  'message:delivered': (data: { messageId: string; deliveredAt: string }) => void;
-  'message:read': (data: { messageId: string; readAt: string }) => void;
-  'typing:update': (data: { conversationId: string; userId: string; isTyping: boolean }) => void;
-  'presence:update': (data: { userId: string; online: boolean }) => void;
+  isTranslated?: boolean;
 }
 
 class SocketService {
   private socket: Socket | null = null;
   private token: string | null = null;
+  private isConnected: boolean = false;
 
   connect(token: string) {
     this.token = token;
+    
+    if (this.socket?.connected) {
+      console.log('🔌 Socket already connected, disconnecting first...');
+      this.socket.disconnect();
+    }
+
+    console.log('🔌 Connecting to WebSocket with namespace /chat...');
     
     // Use environment variable or detect current host for network access
     let socketUrl = import.meta.env.VITE_API_URL;
@@ -48,107 +42,132 @@ class SocketService {
     }
     
     this.socket = io(`${socketUrl}/chat`, {
-      auth: {
-        token: token,
-      },
-      withCredentials: true,
+      auth: { token },
+      transports: ['websocket', 'polling'],
+      upgrade: true,
+      rememberUpgrade: true,
+      timeout: 20000,
     });
 
     this.socket.on('connect', () => {
-      console.log('Connected to server');
+      console.log('🔌 Connected to chat WebSocket');
+      this.isConnected = true;
+      
+      // Test WebSocket connection by immediately requesting online users
+      setTimeout(() => {
+        console.log('🔌 Testing WebSocket connection by requesting online users...');
+        this.getOnlineUsers();
+      }, 1000);
     });
 
-    this.socket.on('disconnect', () => {
-      console.log('Disconnected from server');
+    this.socket.on('disconnect', (reason) => {
+      console.log('🔌 Disconnected from chat WebSocket:', reason);
+      this.isConnected = false;
     });
+
+    this.socket.on('connect_error', (error) => {
+      console.error('🔌 WebSocket connection error:', error);
+      this.isConnected = false;
+    });
+
+    this.socket.on('reconnect_error', (error) => {
+      console.error('❌ WebSocket reconnection error:', error);
+    });
+
+    this.socket.on('reconnect_failed', () => {
+      console.error('❌ WebSocket reconnection failed completely');
+    });
+
+    // Add periodic connection health check
+    setInterval(() => {
+      if (this.socket && !this.socket.connected) {
+        console.log('🔌 Socket disconnected, attempting to reconnect...');
+        this.socket.connect();
+      }
+    }, 5000);
 
     return this.socket;
   }
 
   disconnect() {
     if (this.socket) {
-      // Remove all listeners before disconnecting
-      this.socket.removeAllListeners();
+      console.log('🔌 Disconnecting WebSocket...');
       this.socket.disconnect();
       this.socket = null;
+      this.isConnected = false;
+    }
+  }
+
+  forceReconnect() {
+    console.log('🔌 Force reconnecting WebSocket...');
+    if (this.socket) {
+      this.socket.disconnect();
+    }
+    if (this.token) {
+      this.connect(this.token);
+    }
+  }
+
+  ensureConnection() {
+    if (!this.socket || !this.socket.connected) {
+      console.log('🔌 Ensuring WebSocket connection...');
+      if (this.token) {
+        this.connect(this.token);
+      }
     }
   }
 
   // Message events
   sendMessage(conversationId: string, text: string, sourceLang: string, targetLang: string, receiverId: string) {
-    console.log('🔌 SocketService.sendMessage called with:', {
-      conversationId, 
-      text, 
-      sourceLang, 
-      targetLang,
-      receiverId,
-      socketConnected: !!this.socket
-    });
-    
     if (this.socket) {
-      console.log('🔌 Emitting sendMessage event...');
-      this.socket.emit('sendMessage', { 
-        conversationId, 
-        originalText: text, 
-        sourceLang, 
+      console.log('🔌 Emitting sendMessage with data:', {
+        conversationId,
+        originalText: text,
+        sourceLang,
         targetLang,
         receiverId
       });
-      console.log('🔌 sendMessage event emitted successfully');
-    } else {
-      console.error('🔌 Socket not connected - cannot send message');
-    }
-  }
-
-  // Unread count events
-  getUnreadCounts() {
-    if (this.socket) {
-      console.log('📊 Emitting getUnreadCounts event...');
-      this.socket.emit('getUnreadCounts');
-    } else {
-      console.log('📊 Socket not connected, cannot request unread counts');
-    }
-  }
-
-  onUnreadCounts(callback: (counts: { [conversationId: string]: number }) => void) {
-    if (this.socket) {
-      this.socket.on('unreadCounts', callback);
-    }
-  }
-
-  offUnreadCounts() {
-    if (this.socket) {
-      this.socket.off('unreadCounts');
+      this.socket.emit('sendMessage', {
+        conversationId,
+        originalText: text, // Backend expects 'originalText', not 'text'
+        sourceLang,
+        targetLang,
+        receiverId
+      });
     }
   }
 
   onNewMessage(callback: (message: SocketMessage) => void) {
     if (this.socket) {
-      // Remove any existing listeners first
       this.socket.off('newMessage');
-      this.socket.on('newMessage', callback);
+      this.socket.on('newMessage', (message) => {
+        console.log('🔌 Socket service received newMessage:', message);
+        callback(message);
+      });
     }
   }
 
   onMessageDelivered(callback: (data: { messageId: string; deliveredAt: string }) => void) {
     if (this.socket) {
-      this.socket.on('message:delivered', callback);
+      this.socket.off('messageDelivered');
+      this.socket.on('messageDelivered', callback);
     }
   }
 
   onMessageRead(callback: (data: { messageId: string; readAt: string }) => void) {
     if (this.socket) {
-      this.socket.on('message:read', callback);
+      this.socket.off('messageRead');
+      this.socket.on('messageRead', callback);
     }
   }
 
   markMessageRead(conversationId: string, messageId: string) {
     if (this.socket) {
-      this.socket.emit('message:mark-read', { conversationId, messageId });
+      this.socket.emit('markMessageRead', { conversationId, messageId });
     }
   }
 
-  // Conversation management
+  // Conversation events
   joinConversation(conversationId: string) {
     if (this.socket) {
       this.socket.emit('joinConversation', { conversationId });
@@ -184,8 +203,12 @@ class SocketService {
   // Presence events
   onUserStatusChanged(callback: (data: { userId: string; isOnline: boolean }) => void) {
     if (this.socket) {
+      console.log('🔌 Setting up userStatusChanged listener');
       this.socket.off('userStatusChanged');
-      this.socket.on('userStatusChanged', callback);
+      this.socket.on('userStatusChanged', (data) => {
+        console.log('🔌 Socket service received userStatusChanged:', data);
+        callback(data);
+      });
     }
   }
 
@@ -204,13 +227,49 @@ class SocketService {
 
   getOnlineUsers() {
     if (this.socket) {
+      console.log('🔌 Requesting online users from backend...');
       this.socket.emit('getOnlineUsers');
+    } else {
+      console.log('🔌 Cannot request online users - socket not connected');
+    }
+  }
+
+  onOnlineUsers(callback: (userIds: string[]) => void) {
+    if (this.socket) {
+      console.log('🔌 Setting up onlineUsers listener');
+      this.socket.off('onlineUsers');
+      this.socket.on('onlineUsers', (userIds) => {
+        console.log('🔌 Socket service received onlineUsers:', userIds);
+        // Force log to ensure we can see if events are received
+        console.error('🔌 FORCE LOG - Socket service received onlineUsers:', userIds);
+        callback(userIds);
+      });
     }
   }
 
   onOnlineUsersResponse(callback: (data: { onlineUsers: string[] }) => void) {
     if (this.socket) {
       this.socket.on('onlineUsersResponse', callback);
+    }
+  }
+
+  // Unread counts
+  getUnreadCounts() {
+    if (this.socket) {
+      this.socket.emit('getUnreadCounts');
+    }
+  }
+
+  onUnreadCounts(callback: (counts: { [conversationId: string]: number }) => void) {
+    if (this.socket) {
+      this.socket.off('unreadCounts');
+      this.socket.on('unreadCounts', callback);
+    }
+  }
+
+  offUnreadCounts() {
+    if (this.socket) {
+      this.socket.off('unreadCounts');
     }
   }
 
@@ -242,7 +301,7 @@ class SocketService {
     }
   }
 
-  onConversationCleared(callback: (data: { conversationId: string; clearedBy: string }) => void) {
+  onConversationCleared(callback: (data: { conversationId: string }) => void) {
     if (this.socket) {
       this.socket.off('conversationCleared');
       this.socket.on('conversationCleared', callback);
@@ -256,11 +315,10 @@ class SocketService {
     }
   }
 
-  isConnected(): boolean {
-    return this.socket?.connected ?? false;
+  get connected(): boolean {
+    return this.isConnected && !!this.socket?.connected;
   }
 
-  // Method to clean up all listeners
   removeAllListeners() {
     if (this.socket) {
       this.socket.removeAllListeners();
@@ -268,5 +326,4 @@ class SocketService {
   }
 }
 
-export const socketService = new SocketService();
-export type { SocketMessage };
+export default new SocketService();
