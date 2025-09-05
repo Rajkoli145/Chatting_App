@@ -25,7 +25,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
         throw new UnauthorizedException();
       }
       console.log('✅ JWT Strategy: User validated successfully:', user.name);
-      return { userId: user._id.toString(), mobile: user.mobile };
+      return { sub: user._id.toString(), userId: user._id.toString(), mobile: user.mobile };
     } catch (error) {
       console.log('❌ JWT Strategy: Validation error:', error.message);
       throw new UnauthorizedException();

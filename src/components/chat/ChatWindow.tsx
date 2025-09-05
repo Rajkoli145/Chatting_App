@@ -413,7 +413,10 @@ export default function ChatWindow() {
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
         {messages.map((message, index) => {
           const isOwn = message.senderId === (user._id || user.id);
-          const messageContent = message.translatedText || message.originalText;
+          // Show message in user's preferred language
+          const messageContent = isOwn 
+            ? message.originalText  // Sender sees original text
+            : (message.translatedText || message.originalText); // Receiver sees translated text
           const isGif = messageContent.startsWith('[GIF]');
           const gifUrl = isGif ? messageContent.replace('[GIF]', '') : null;
           
@@ -443,7 +446,7 @@ export default function ChatWindow() {
                     <p className="text-sm whitespace-pre-wrap break-words">
                       {messageContent}
                     </p>
-                    {message.translatedText && message.translatedText !== message.originalText && (
+                    {!isOwn && message.translatedText && message.translatedText !== message.originalText && (
                       <div className="mt-2 pt-2 border-t border-border/20">
                         <div className="flex items-center justify-between">
                           <Button

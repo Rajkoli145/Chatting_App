@@ -64,84 +64,120 @@ export class ConversationsService {
   }
 
   async getUserConversations(userId: string): Promise<any[]> {
-    console.log('🔍 Getting conversations for userId:', userId);
-    
-    // Convert string ID to ObjectId for MongoDB query
-    const userObjectId = new Types.ObjectId(userId);
-    console.log('🔍 Converted to ObjectId:', userObjectId);
-    
-    const conversations = await this.conversationModel.find({
-      participants: userObjectId
-    })
-    .populate('participants', 'name mobile preferredLanguage')
-    .sort({ updatedAt: -1 });
-    
-    console.log('🔍 Found conversations:', conversations.length);
-
-    const conversationsWithLastMessage = await Promise.all(
-      conversations.map(async (conv) => {
-        const lastMessage = await this.messageModel
-          .findOne({ conversationId: conv._id })
-          .sort({ createdAt: -1 });
-
-        const otherParticipant = (conv.participants as any[]).find(
-          (p: any) => p._id.toString() !== userId
-        );
-
-        return {
-          id: conv._id,
-          user: {
-            id: otherParticipant._id,
-            name: otherParticipant.name,
-            mobile: otherParticipant.mobile,
-            preferredLanguage: otherParticipant.preferredLanguage
-          },
-          lastMessage: lastMessage ? {
-            text: lastMessage.originalText,
-            timestamp: (lastMessage as any).createdAt,
-            isOwn: lastMessage.senderId.toString() === userId
-          } : null,
-          updatedAt: (conv as any).updatedAt
-        };
+    try {
+      console.log('🔍 Getting conversations for userId:', userId);
+      
+      // Convert string ID to ObjectId for MongoDB query
+      const userObjectId = new Types.ObjectId(userId);
+      console.log('🔍 Converted to ObjectId:', userObjectId);
+      
+      const conversations = await this.conversationModel.find({
+        participants: userObjectId
       })
-    );
+      .populate('participants', 'name mobile preferredLanguage')
+      .sort({ updatedAt: -1 });
+      
+      console.log('🔍 Found conversations:', conversations.length);
 
-    return conversationsWithLastMessage;
+      const conversationsWithLastMessage = await Promise.all(
+        conversations.map(async (conv) => {
+          try {
+            const lastMessage = await this.messageModel
+              .findOne({ conversationId: conv._id })
+              .sort({ createdAt: -1 });
+
+            const otherParticipant = (conv.participants as any[]).find(
+              (p: any) => p && p._id && p._id.toString() !== userId
+            );
+
+            // Check if otherParticipant exists
+            if (!otherParticipant) {
+              console.log('⚠️ No other participant found for conversation:', conv._id);
+              console.log('⚠️ Participants:', conv.participants);
+              return null; // Skip this conversation
+            }
+
+            return {
+              id: conv._id,
+              user: {
+                id: otherParticipant._id,
+                name: otherParticipant.name,
+                mobile: otherParticipant.mobile,
+                preferredLanguage: otherParticipant.preferredLanguage
+              },
+              lastMessage: lastMessage ? {
+                text: lastMessage.originalText,
+                timestamp: lastMessage.createdAt
+              } : null,
+              updatedAt: (conv as any).updatedAt
+            };
+          } catch (error) {
+            console.error('❌ Error processing conversation:', conv._id, error);
+            return null;
+          }
+        })
+      );
+
+      const validConversations = conversationsWithLastMessage.filter(conv => conv !== null);
+      console.log('📋 Conversations returned:', validConversations);
+      return validConversations;
+    } catch (error) {
+      console.error('❌ Error getting user conversations:', error);
+      throw error;
+    }
   }
 
   async getConversationMessages(conversationId: string, userId: string): Promise<any> {
-    // Convert string ID to ObjectId for MongoDB query
-    const userObjectId = new Types.ObjectId(userId);
-    
-    // Verify user is participant
-    const conversation = await this.conversationModel.findOne({
-      _id: conversationId,
-      participants: userObjectId
-    });
+    try {
+      console.log(`💬 Getting messages for conversation: ${conversationId} user: ${userId}`);
+      
+      // Convert string IDs to ObjectIds for MongoDB query
+      let conversationObjectId: Types.ObjectId;
+      let userObjectId: Types.ObjectId;
+      
+      try {
+        conversationObjectId = new Types.ObjectId(conversationId);
+        userObjectId = new Types.ObjectId(userId);
+      } catch (error) {
+        console.error(`❌ Invalid ObjectId format - conversationId: ${conversationId}, userId: ${userId}`);
+        throw new Error('Invalid conversation or user ID format');
+      }
+      
+      // Verify user is participant
+      const conversation = await this.conversationModel.findOne({
+        _id: conversationObjectId,
+        participants: userObjectId
+      });
 
-    if (!conversation) {
-      throw new Error('Conversation not found or user not authorized');
+      if (!conversation) {
+        console.log(`🚫 Conversation ${conversationId} not found or user ${userId} not authorized`);
+        throw new Error('Conversation not found or user not authorized');
+      }
+
+      // Get messages for this conversation
+      const messages = await this.messageModel
+        .find({ conversationId: conversationObjectId })
+        .sort({ createdAt: 1 })
+        .limit(50);
+
+      console.log(`💬 Found ${messages.length} messages for conversation ${conversationId}`);
+
+      return messages.map(msg => ({
+        id: msg._id,
+        conversationId: msg.conversationId,
+        senderId: msg.senderId,
+        receiverId: msg.receiverId,
+        originalText: msg.originalText,
+        translatedText: msg.translatedText,
+        sourceLang: msg.sourceLang,
+        targetLang: msg.targetLang,
+        status: msg.status,
+        createdAt: msg.createdAt,
+        timestamp: msg.createdAt
+      }));
+    } catch (error) {
+      console.error(`❌ Error getting messages for conversation ${conversationId}:`, error);
+      throw error;
     }
-
-    // Get messages for this conversation
-    const messages = await this.messageModel
-      .find({ conversationId })
-      .sort({ createdAt: 1 })
-      .limit(50);
-
-    console.log(` Found ${messages.length} messages for conversation ${conversationId}`);
-
-    return messages.map(msg => ({
-      id: msg._id,
-      conversationId: msg.conversationId,
-      senderId: msg.senderId,
-      receiverId: msg.receiverId,
-      originalText: msg.originalText,
-      translatedText: msg.translatedText,
-      sourceLang: msg.sourceLang,
-      targetLang: msg.targetLang,
-      status: msg.status,
-      createdAt: (msg as any).createdAt
-    }));
   }
 }

@@ -13,33 +13,42 @@ export class ConversationsController {
   ) {}
 
   @Get()
+  @UseGuards(JwtAuthGuard)
   async getConversations(@Request() req) {
-    // Get user ID from query param for testing different users
-    const userId = req.query.userId || '68b708e13c8c92c7f2769ca9';
-    console.log('📋 Getting conversations for user:', userId);
+    const userId = req.user.sub; // Get user ID from JWT token
+    console.log('📋 Getting conversations for authenticated user:', userId);
     const conversations = await this.conversationsService.getUserConversations(userId);
     console.log('📋 Conversations returned:', JSON.stringify(conversations, null, 2));
     return conversations;
   }
 
   @Post()
+  @UseGuards(JwtAuthGuard)
   async createConversation(@Request() req, @Body() body: { userId: string }) {
-    // Temporarily hardcode user ID for testing
-    const userId = '68b68bb0ecfa98f8d1e87e4f';
-    console.log('🔗 Creating conversation between users:', userId, 'and', body.userId);
+    const userId = req.user.sub; // Get user ID from JWT token
+    console.log('🔗 Creating conversation between authenticated users:', userId, 'and', body.userId);
     return this.conversationsService.createConversation(userId, body.userId);
   }
 
   @Get(':id/messages')
+  @UseGuards(JwtAuthGuard)
   async getMessages(@Request() req, @Param('id') conversationId: string) {
-    const userId = req.query.userId || '68b68bb0ecfa98f8d1e87e4f';
-    console.log('💬 Getting messages for conversation:', conversationId, 'user:', userId);
-    const messages = await this.conversationsService.getConversationMessages(conversationId, userId);
-    console.log('💬 Messages found:', messages?.length || 0);
-    return messages;
+    try {
+      const userId = req.user.sub; // Get user ID from JWT token
+      console.log('💬 Getting messages for conversation:', conversationId, 'authenticated user:', userId);
+      
+      const messages = await this.conversationsService.getConversationMessages(conversationId, userId);
+      console.log('💬 Messages found:', messages?.length || 0);
+      
+      return messages;
+    } catch (error) {
+      console.error('❌ Error in getMessages controller:', error);
+      throw error;
+    }
   }
 
   @Post(':id/messages')
+  @UseGuards(JwtAuthGuard)
   async sendMessage(
     @Param('id') conversationId: string,
     @Body() body: {
@@ -47,12 +56,11 @@ export class ConversationsController {
       sourceLang: string;
       targetLang?: string;
       receiverId: string;
-      senderId?: string;
     },
     @Request() req,
   ) {
-    const userId = body.senderId || '68b68bb0ecfa98f8d1e87e4f';
-    console.log('📤 Sending message via API:', body.originalText, 'from user:', userId, 'to:', body.receiverId);
+    const userId = req.user.sub; // Get user ID from JWT token
+    console.log('📤 Sending message via API:', body.originalText, 'from authenticated user:', userId, 'to:', body.receiverId);
     
     try {
       // Use MessagesService to properly save message to database

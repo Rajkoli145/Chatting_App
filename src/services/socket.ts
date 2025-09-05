@@ -76,7 +76,17 @@ class SocketService {
 
   // Message events
   sendMessage(conversationId: string, text: string, sourceLang: string, targetLang: string, receiverId: string) {
+    console.log('🔌 SocketService.sendMessage called with:', {
+      conversationId, 
+      text, 
+      sourceLang, 
+      targetLang,
+      receiverId,
+      socketConnected: !!this.socket
+    });
+    
     if (this.socket) {
+      console.log('🔌 Emitting sendMessage event...');
       this.socket.emit('sendMessage', { 
         conversationId, 
         originalText: text, 
@@ -84,6 +94,31 @@ class SocketService {
         targetLang,
         receiverId
       });
+      console.log('🔌 sendMessage event emitted successfully');
+    } else {
+      console.error('🔌 Socket not connected - cannot send message');
+    }
+  }
+
+  // Unread count events
+  getUnreadCounts() {
+    if (this.socket) {
+      console.log('📊 Emitting getUnreadCounts event...');
+      this.socket.emit('getUnreadCounts');
+    } else {
+      console.log('📊 Socket not connected, cannot request unread counts');
+    }
+  }
+
+  onUnreadCounts(callback: (counts: { [conversationId: string]: number }) => void) {
+    if (this.socket) {
+      this.socket.on('unreadCounts', callback);
+    }
+  }
+
+  offUnreadCounts() {
+    if (this.socket) {
+      this.socket.off('unreadCounts');
     }
   }
 

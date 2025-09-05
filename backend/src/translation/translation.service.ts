@@ -30,7 +30,7 @@ export class TranslationService {
             'x-rapidapi-host': this.rapidApiHost,
             'x-rapidapi-key': this.rapidApiKey,
           },
-          timeout: 5000
+          timeout: 2000
         }
       );
 

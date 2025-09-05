@@ -59,6 +59,9 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Store userId on the socket for easier access
       (client as any).userId = userId;
       
+      // Add event listener debugging
+      this.logger.log(`🔥 Setting up event listeners for socket ${client.id}`);
+      
       // Notify user is online (broadcast to all clients)
       this.server.emit('userStatusChanged', { userId, isOnline: true });
       
@@ -74,12 +77,26 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
     @ConnectedSocket() client: Socket,
     @MessageBody() data: { conversationId: string },
   ) {
+    this.logger.log('🔥 BACKEND: joinConversation event received!');
+    this.logger.log('🔥 BACKEND: joinConversation data:', JSON.stringify(data, null, 2));
+    
     const userId = (client as any).userId;
     // Join conversation room and user-specific room
     client.join(`conversation_${data.conversationId}`);
     client.join(`user_${userId}`);
     this.logger.log(`🔌 User ${userId} joined conversation room: conversation_${data.conversationId}`);
     this.logger.log(`🔌 User ${userId} joined user room: user_${userId}`);
+    
+    // Send current unread counts BEFORE marking as read
+    const unreadCounts = await this.messagesService.getUnreadMessageCounts(userId);
+    client.emit('unreadCounts', unreadCounts);
+    
+    // Mark messages as read when user joins conversation (after sending counts)
+    await this.messagesService.markMessagesAsRead(data.conversationId, userId);
+    
+    // Send updated unread counts after marking as read
+    const updatedUnreadCounts = await this.messagesService.getUnreadMessageCounts(userId);
+    client.emit('unreadCounts', updatedUnreadCounts);
     
     // Get all clients in this conversation room
     const room = this.server?.sockets?.adapter?.rooms?.get(`conversation_${data.conversationId}`);
@@ -105,9 +122,18 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
   }
 
   @SubscribeMessage('getOnlineUsers')
-  handleGetOnlineUsers(@ConnectedSocket() client: Socket) {
-    const onlineUsers = Array.from(this.userSockets.keys());
-    client.emit('onlineUsersResponse', { onlineUsers });
+  async handleGetOnlineUsers(@ConnectedSocket() client: Socket) {
+    const onlineUserIds = Array.from(this.connectedUsers.keys());
+    client.emit('onlineUsers', onlineUserIds);
+  }
+
+  @SubscribeMessage('getUnreadCounts')
+  async handleGetUnreadCounts(@ConnectedSocket() client: Socket) {
+    const userId = (client as any).userId;
+    console.log(`📊 Frontend requested unread counts for user: ${userId}`);
+    const unreadCounts = await this.messagesService.getUnreadMessageCounts(userId);
+    console.log(`📊 Sending unread counts to frontend:`, unreadCounts);
+    client.emit('unreadCounts', unreadCounts);
   }
 
   handleDisconnect(client: Socket) {
@@ -146,6 +172,10 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       targetLang?: string;
     },
   ) {
+    this.logger.log('🔥 BACKEND: sendMessage event received!');
+    this.logger.log('🔥 BACKEND: Data received:', JSON.stringify(data, null, 2));
+    this.logger.log('🔥 BACKEND: Client ID:', client.id);
+    
     try {
       const token = client.handshake.auth.token;
       const payload = this.jwtService.verify(token);
@@ -164,59 +194,162 @@ export class ChatGateway implements OnGatewayConnection, OnGatewayDisconnect {
       // Get all participants in the conversation
       const conversation = await this.messagesService.findConversationById(data.conversationId);
       
-      // Send personalized translated messages to each participant
-      for (const participantId of conversation.participants) {
-        // Get participant's preferred language
-        const User = this.messagesService.getUserModel();
-        const participant = await User.findById(participantId);
-        const participantLang = participant?.preferredLanguage || 'en';
-        
-        // Translate message to participant's language
-        let personalizedTranslation = savedMessage.originalText;
-        if (participantLang !== savedMessage.sourceLang) {
-          try {
-            const TranslationService = this.messagesService.getTranslationService();
-            personalizedTranslation = await TranslationService.translate(
-              savedMessage.originalText, 
-              savedMessage.sourceLang, 
-              participantLang
-            );
-          } catch (error) {
-            this.logger.error('Translation failed for participant:', error);
-          }
-        }
-
-        // Create personalized message for this participant
-        const personalizedMessage = {
-          id: savedMessage._id.toString(),
-          conversationId: savedMessage.conversationId,
-          senderId: savedMessage.senderId,
-          receiverId: savedMessage.receiverId,
-          originalText: savedMessage.originalText,
-          translatedText: personalizedTranslation,
-          sourceLang: savedMessage.sourceLang,
-          targetLang: participantLang,
-          timestamp: (savedMessage as any).createdAt,
-          status: savedMessage.status,
-        };
-
-        // Send to this specific participant
-        this.server.to(`user_${participantId}`).emit('newMessage', personalizedMessage);
-        
-        this.logger.log(`💬 Sent personalized message to user ${participantId} in ${participantLang}: "${personalizedTranslation}"`);
-      }
+      // Send personalized messages immediately to each user
+      await this.sendPersonalizedMessages(savedMessage, conversation.participants);
+      
+      this.logger.log(`💬 Message delivered immediately to conversation: ${data.conversationId}`);
+      
+      // Process personalized translations asynchronously (non-blocking)
+      this.processPersonalizedTranslations(savedMessage, conversation.participants).catch(error => {
+        this.logger.error('Background translation processing failed:', error);
+      });
 
       this.logger.log(`💬 Message saved and broadcasted to conversation: ${data.conversationId}`);
       this.logger.log(`💬 Message ID: ${savedMessage._id.toString()}`);
       
       // Log room participants for debugging
       const conversationRoom = this.server?.sockets?.adapter?.rooms?.get(`conversation_${data.conversationId}`);
-      this.logger.log(`💬 Conversation room size: ${conversationRoom?.size || 0}`);
-      
     } catch (error) {
-      this.logger.error('Failed to send message:', error);
+      this.logger.error('Error handling message:', error);
       client.emit('messageError', { error: 'Failed to send message' });
     }
+  }
+
+  // Send personalized messages immediately to each participant
+  private async sendPersonalizedMessages(savedMessage: any, participants: any[]) {
+    const User = this.messagesService.getUserModel();
+    const TranslationService = this.messagesService.getTranslationService();
+    
+    // Get sender's preferred language
+    const sender = await User.findById(savedMessage.senderId);
+    const senderPreferredLang = sender?.preferredLanguage || savedMessage.sourceLang || 'en';
+    
+    // Send immediate messages to all participants
+    for (const participantId of participants) {
+      try {
+        const participant = await User.findById(participantId);
+        const participantLang = participant?.preferredLanguage || 'en';
+        const isSender = participantId.toString() === savedMessage.senderId.toString();
+        
+        let messageToSend;
+        
+        if (isSender) {
+          // Sender always sees original text
+          messageToSend = {
+            id: savedMessage._id.toString(),
+            conversationId: savedMessage.conversationId,
+            senderId: savedMessage.senderId,
+            receiverId: savedMessage.receiverId,
+            originalText: savedMessage.originalText,
+            translatedText: savedMessage.originalText, // Same as original for sender
+            sourceLang: savedMessage.sourceLang,
+            targetLang: senderPreferredLang,
+            timestamp: savedMessage.createdAt,
+            status: savedMessage.status,
+            isTranslated: false
+          };
+        } else {
+          // Receiver gets basic translation (will be refined in background)
+          let basicTranslation = savedMessage.originalText;
+          
+          // Only translate if languages are different
+          if (senderPreferredLang !== participantLang) {
+            try {
+              basicTranslation = await TranslationService.translate(
+                savedMessage.originalText,
+                savedMessage.sourceLang,
+                participantLang
+              );
+            } catch (error) {
+              this.logger.error(`Basic translation failed for ${participantId}:`, error);
+              // Fall back to original text
+            }
+          }
+          
+          messageToSend = {
+            id: savedMessage._id.toString(),
+            conversationId: savedMessage.conversationId,
+            senderId: savedMessage.senderId,
+            receiverId: savedMessage.receiverId,
+            originalText: savedMessage.originalText,
+            translatedText: basicTranslation,
+            sourceLang: savedMessage.sourceLang,
+            targetLang: participantLang,
+            timestamp: savedMessage.createdAt,
+            status: savedMessage.status,
+            isTranslated: basicTranslation !== savedMessage.originalText
+          };
+        }
+        
+        // Send to user's personal room AND conversation room
+        this.server.to(`user_${participantId}`).emit('newMessage', messageToSend);
+        this.server.to(`conversation_${savedMessage.conversationId}`).emit('newMessage', messageToSend);
+        
+        // Update unread counts for receiver (not sender)
+        if (!isSender) {
+          const unreadCounts = await this.messagesService.getUnreadMessageCounts(participantId.toString());
+          this.server.to(`user_${participantId}`).emit('unreadCounts', unreadCounts);
+        }
+        
+        this.logger.log(`💬 Sent immediate message to ${participantId}: "${messageToSend.translatedText}"`);
+        
+      } catch (error) {
+        this.logger.error(`Failed to send immediate message to participant ${participantId}:`, error);
+      }
+    }
+  }
+
+  private async processPersonalizedTranslations(savedMessage: any, participants: any[]) {
+    const User = this.messagesService.getUserModel();
+    const TranslationService = this.messagesService.getTranslationService();
+    
+    // Get sender's preferred language
+    const sender = await User.findById(savedMessage.senderId);
+    const senderPreferredLang = sender?.preferredLanguage || savedMessage.sourceLang || 'en';
+    
+    // Process all translations in parallel for better performance
+    const translationPromises = participants.map(async (participantId) => {
+      try {
+        const participant = await User.findById(participantId);
+        const participantLang = participant?.preferredLanguage || 'en';
+        
+        // Skip if same language as sender's preferred language or if it's the sender
+        if (participantLang === senderPreferredLang || participantId.toString() === savedMessage.senderId.toString()) {
+          this.logger.log(`🌐 Skipping translation for ${participantId}: same language (${participantLang}) or sender`);
+          return;
+        }
+        
+        const personalizedTranslation = await TranslationService.translate(
+          savedMessage.originalText, 
+          savedMessage.sourceLang, 
+          participantLang
+        );
+        
+        // Send updated translation if different from original
+        if (personalizedTranslation !== savedMessage.originalText) {
+          const updatedMessage = {
+            id: savedMessage._id.toString(),
+            conversationId: savedMessage.conversationId,
+            senderId: savedMessage.senderId,
+            receiverId: savedMessage.receiverId,
+            originalText: savedMessage.originalText,
+            translatedText: personalizedTranslation,
+            sourceLang: savedMessage.sourceLang,
+            targetLang: participantLang,
+            timestamp: savedMessage.createdAt,
+            status: savedMessage.status,
+            isTranslationUpdate: true
+          };
+          
+          this.server.to(`user_${participantId}`).emit('messageTranslationUpdate', updatedMessage);
+          this.logger.log(`🌐 Sent personalized translation to ${participantId}: "${personalizedTranslation}"`);
+        }
+      } catch (error) {
+        this.logger.error(`Translation failed for participant ${participantId}:`, error);
+      }
+    });
+    
+    await Promise.all(translationPromises);
   }
 
   @SubscribeMessage('typing')

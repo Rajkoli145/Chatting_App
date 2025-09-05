@@ -196,17 +196,13 @@ class ApiService {
 
   // Chat endpoints
   async getConversations() {
-    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-    const userId = currentUser._id || currentUser.id;
-    console.log('API: Getting conversations for user:', userId);
-    return this.request<Conversation[]>(`/conversations?userId=${userId}`);
+    console.log('API: Getting conversations for authenticated user');
+    return this.request<Conversation[]>(`/conversations`);
   }
 
   async getMessages(conversationId: string, cursor?: string) {
-    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-    const userId = currentUser._id || currentUser.id;
-    console.log('API: Getting messages for conversation:', conversationId, 'user:', userId);
-    const query = cursor ? `?cursor=${cursor}&userId=${userId}` : `?userId=${userId}`;
+    console.log('API: Getting messages for conversation:', conversationId, 'for authenticated user');
+    const query = cursor ? `?cursor=${cursor}` : '';
     return this.request<{ messages: Message[]; hasMore: boolean }>(`/conversations/${conversationId}/messages${query}`);
   }
 
@@ -215,16 +211,10 @@ class ApiService {
     sourceLang: string;
     receiverId: string;
   }) {
-    const currentUser = JSON.parse(localStorage.getItem('user') || '{}');
-    const senderId = currentUser._id || currentUser.id;
-    
-    console.log('API: Sending message to conversation:', conversationId, 'from:', senderId, 'to:', messageData.receiverId);
+    console.log('API: Sending message to conversation:', conversationId, 'for authenticated user');
     return this.request(`/conversations/${conversationId}/messages`, {
       method: 'POST',
-      body: JSON.stringify({
-        ...messageData,
-        senderId: senderId
-      }),
+      body: JSON.stringify(messageData),
     });
   }
 

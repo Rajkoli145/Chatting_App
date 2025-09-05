@@ -7,7 +7,10 @@ export enum MessageStatus {
   READ = 'read'
 }
 
-export type MessageDocument = Message & Document;
+export type MessageDocument = Message & Document & {
+  createdAt: Date;
+  updatedAt: Date;
+};
 
 @Schema({ timestamps: true })
 export class Message {
@@ -40,6 +43,10 @@ export class Message {
 
   @Prop()
   readAt: Date;
+
+  // These are automatically added by timestamps: true, but we need them for TypeScript
+  createdAt: Date;
+  updatedAt: Date;
 }
 
 export const MessageSchema = SchemaFactory.createForClass(Message);

@@ -6,7 +6,7 @@ import { Badge } from '@/components/ui/badge';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu';
 import { useAuth } from '@/contexts/AuthContext';
-import { chatService } from '@/services/chat';
+import { socketService } from '@/services/socket';
 import { apiService } from '@/services/api';
 import { useToast } from '@/hooks/use-toast';
 import EmojiPicker from '@/components/EmojiPicker';
@@ -57,6 +57,7 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
   const [showOriginal, setShowOriginal] = useState<{ [key: string]: boolean }>({});
   const [typingUsers, setTypingUsers] = useState<Set<string>>(new Set());
   const [messagesLoaded, setMessagesLoaded] = useState(false);
+  const [userOnlineStatus, setUserOnlineStatus] = useState<{ [userId: string]: boolean }>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
 
   // Connect to chat WebSocket on mount
@@ -66,45 +67,36 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
     
     if (token && user) {
       console.log(' Connecting to chat WebSocket...');
-      chatService.connect(token);
+      // Connection is handled by AuthContext via socketService
       
       // Set up WebSocket listeners
-      chatService.onNewMessage((message) => {
-        console.log(' Received new message:', message);
-        console.log(' Current user ID:', user?._id || user?.id);
-        console.log(' Message sender ID:', message.senderId);
-        console.log(' Selected conversation ID:', selectedConversationId);
-        console.log(' Message conversation ID:', message.conversationId);
-        
-        const incomingMessage = {
+      socketService.onNewMessage((message) => {
+        const incomingMessage: Message = {
           ...message,
+          id: message.id,
           createdAt: new Date(message.timestamp),
           timestamp: new Date(message.timestamp),
-          isOwn: message.senderId === (user?._id || user?.id)
+          isOwn: message.senderId === (user?._id || user?.id),
+          status: (message.status as 'sending' | 'sent' | 'delivered' | 'read' | 'failed') || 'sent',
         };
         
         setMessages(prev => {
           // Check if message already exists to prevent duplicates
           const messageExists = prev.some(msg => msg.id === message.id);
           if (messageExists) {
-            console.log(' Message already exists, skipping:', message.id);
             return prev;
           }
           
           // Only add message if it belongs to the current conversation
           if (message.conversationId !== selectedConversationId) {
-            console.log(' Message not for current conversation, skipping');
-            console.log(' Message conversation ID:', message.conversationId);
-            console.log(' Selected conversation ID:', selectedConversationId);
             return prev;
           }
           
-          console.log(' Adding new message to UI:', incomingMessage);
           return [...prev, incomingMessage];
         });
       });
 
-      chatService.onUserTyping(({ userId, isTyping }) => {
+      socketService.onTypingUpdate(({ userId, isTyping }) => {
         console.log(' User typing:', userId, isTyping);
         setTypingUsers(prev => {
           const newSet = new Set(prev);
@@ -117,41 +109,65 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
         });
       });
 
-      chatService.onUserOnline(({ userId }) => {
-        console.log(' User online:', userId);
+      socketService.onUserStatusChanged(({ userId, isOnline }) => {
+        console.log(' User online status changed:', userId, isOnline);
+        setUserOnlineStatus(prev => ({
+          ...prev,
+          [userId]: isOnline
+        }));
       });
 
-      chatService.onUserOffline(({ userId }) => {
-        console.log(' User offline:', userId);
+      // Request current online users when connecting
+      socketService.getOnlineUsers();
+      socketService.onOnlineUsersResponse(({ onlineUsers }) => {
+        console.log(' Received online users list:', onlineUsers);
+        const statusMap: { [userId: string]: boolean } = {};
+        onlineUsers.forEach(userId => {
+          statusMap[userId] = true;
+        });
+        setUserOnlineStatus(statusMap);
       });
 
       return () => {
         console.log(' Disconnecting chat WebSocket');
-        chatService.removeAllListeners();
-        chatService.disconnect();
+        socketService.removeAllListeners();
+        // Disconnection is handled by AuthContext
       };
     }
   }, [user, selectedConversationId]);
 
+  // Effect to join conversation when selected conversation changes
+  useEffect(() => {
+    console.log('🔄 ChatInterface: selectedConversationId changed to:', selectedConversationId);
+    if (selectedConversationId && selectedConversation) {
+      console.log('🔄 ChatInterface: Joining conversation and loading messages');
+      socketService.joinConversation(selectedConversationId);
+      loadMessages();
+      
+      // Clear unread count for this conversation when it's selected
+      socketService.getUnreadCounts();
+    }
+  }, [selectedConversationId, selectedConversation]);
+
   // Join conversation when selected and load messages
   useEffect(() => {
-    console.log(' Effect triggered - selectedConversationId:', selectedConversationId, 'user:', user?.id);
+    console.log('🔄 Conversation effect triggered:', { selectedConversationId, userId: user?._id || user?.id });
     
     if (selectedConversationId && user) {
-      console.log(' Joining conversation:', selectedConversationId);
-      chatService.joinConversation(selectedConversationId);
+      console.log('🔄 Joining conversation and loading messages');
+      // Join the new conversation
+      socketService.joinConversation(selectedConversationId);
       
-      // Load messages from API only
-      console.log(' Loading messages from API');
+      // Load messages from API
       loadMessages();
       
       setMessagesLoaded(true);
     } else if (selectedConversationId) {
+      console.log('🔄 Conversation selected but user not ready');
       // Don't clear messages if we have a conversation but user is still loading
-      console.log(' Waiting for user data...');
     } else {
+      console.log('🔄 No conversation selected, clearing messages');
       // Clear messages when no conversation is selected
-      console.log(' Clearing messages - no conversation selected');
       setMessages([]);
       setMessagesLoaded(false);
     }
@@ -165,54 +181,87 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
   const loadMessages = async () => {
     if (!selectedConversationId) return;
     
+    console.log('📥 Loading messages for conversation:', selectedConversationId);
+    
     try {
       const data = await apiService.getMessages(selectedConversationId);
+      console.log('📥 Raw API response:', data);
+      
       const messages = Array.isArray(data) ? data : data.messages || [];
+      console.log('📥 Extracted messages array:', messages);
+      
       const formattedMessages = messages.map(msg => ({
         ...msg,
+        id: msg._id || msg.id,
         createdAt: new Date(msg.createdAt),
         timestamp: new Date(msg.createdAt),
         isOwn: msg.senderId === (user?._id || user?.id)
       }));
       
-      console.log(' Loading messages from API for conversation:', selectedConversationId, formattedMessages.length);
+      console.log('📥 Formatted messages:', formattedMessages);
       setMessages(formattedMessages);
+      console.log('📥 Messages state updated with', formattedMessages.length, 'messages');
     } catch (error) {
-      console.error('Failed to load messages:', error);
-      // If conversation doesn't exist, clear the selected conversation
+      console.error('📥 Failed to load messages:', error);
       if (error.message?.includes('404') || error.message?.includes('500')) {
-        console.log(' Conversation not found, clearing selection');
         setMessages([]);
-        // You might want to navigate back to conversation list or show an error
+        localStorage.removeItem('selectedConversationId');
       }
     }
   };
 
   const handleSendMessage = async () => {
-    console.log(' handleSendMessage - newMessage:', newMessage, typeof newMessage);
+    console.log('🚀 handleSendMessage called - newMessage:', newMessage, 'type:', typeof newMessage);
     const messageText = typeof newMessage === 'string' ? newMessage.trim() : '';
-    if (!messageText || !selectedConversationId || !selectedConversation) return;
+    console.log('🚀 messageText after processing:', messageText);
+    console.log('🚀 selectedConversationId:', selectedConversationId);
+    console.log('🚀 selectedConversation:', selectedConversation);
+    
+    if (!messageText || !selectedConversationId || !selectedConversation) {
+      console.log('🚀 Early return - missing data');
+      return;
+    }
 
     const receiverId = selectedConversation.user.id;
-    console.log(' Sending message from:', user?.id, 'to:', receiverId);
+    const senderId = user?._id || user?.id;
+    console.log('🚀 receiverId:', receiverId, 'senderId:', senderId);
+
+    if (!senderId) {
+      console.log('🚀 No sender ID - authentication error');
+      toast({
+        title: 'Error',
+        description: 'User authentication error',
+        variant: 'destructive',
+      });
+      return;
+    }
 
     // Clear the input immediately for better UX
     setNewMessage('');
+    console.log('🚀 Input cleared, sending message via WebSocket...');
 
     try {
       // Send via WebSocket only - backend handles persistence
-      chatService.sendMessage({
+      console.log('🚀 Calling socketService.sendMessage with:', {
         conversationId: selectedConversationId,
-        originalText: messageText,
-        sourceLang: user?.preferredLanguage || 'en',
-        targetLang: selectedConversation.user.preferredLanguage,
-        receiverId: receiverId
+        message: messageText,
+        senderLang: user?.preferredLanguage || 'en',
+        receiverLang: selectedConversation.user.preferredLanguage,
+        receiverId
       });
-
-      console.log(' Message sent successfully');
+      
+      socketService.sendMessage(
+        selectedConversationId,
+        messageText,
+        user?.preferredLanguage || 'en',
+        selectedConversation.user.preferredLanguage,
+        receiverId
+      );
+      
+      console.log('🚀 Message sent successfully via WebSocket');
       
     } catch (error) {
-      console.error(' Failed to send message:', error);
+      console.error('🚀 Failed to send message:', error);
       toast({
         title: 'Error',
         description: 'Failed to send message',
@@ -293,8 +342,8 @@ const ChatInterface: React.FC<ChatInterfaceProps> = ({ selectedConversationId, s
               {selectedConversation?.user?.name || 'Chat User'}
             </h2>
             <div className="flex items-center space-x-2 text-sm text-muted-foreground">
-              <div className={`w-2 h-2 rounded-full ${selectedConversation?.user?.isOnline ? 'bg-green-500' : 'bg-gray-400'}`} />
-              <span>{selectedConversation?.user?.isOnline ? 'Online' : 'Offline'}</span>
+              <div className={`w-2 h-2 rounded-full ${userOnlineStatus[selectedConversation?.user?.id] ? 'bg-green-500' : 'bg-gray-400'}`} />
+              <span>{userOnlineStatus[selectedConversation?.user?.id] ? 'Online' : 'Offline'}</span>
               {typingUsers.size > 0 && (
                 <span className="text-blue-500 animate-pulse">typing...</span>
               )}

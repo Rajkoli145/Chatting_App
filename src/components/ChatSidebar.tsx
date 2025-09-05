@@ -42,26 +42,43 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
   const { user, logout, updateUser } = useAuth();
   const { toast } = useToast();
   
-  // Debug user data
-  console.log('ChatSidebar: Current user data:', user);
-  console.log('ChatSidebar: User name:', user?.name);
-  console.log('ChatSidebar: User language:', user?.preferredLanguage);
-  
+  // Cleanup effect for WebSocket listeners
   useEffect(() => {
-    console.log('ChatSidebar: User state changed:', user);
-  }, [user]);
+    return () => {
+      // Clean up listeners when component unmounts
+      socketService.removeAllListeners();
+    };
+  }, []);
   
   const [conversations, setConversations] = useState<Conversation[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [onlineUsers, setOnlineUsers] = useState<Set<string>>(new Set());
   const [searchQuery, setSearchQuery] = useState('');
+  const [unreadCounts, setUnreadCounts] = useState<{ [conversationId: string]: number }>({});
 
   useEffect(() => {
     if (user?._id || user?.id) {
       loadConversations();
       setupOnlineStatusTracking();
+      setupUnreadCountTracking();
     }
-  }, [user]);
+  }, [user?._id || user?.id]);
+
+  const setupUnreadCountTracking = () => {
+    console.log('📊 Setting up unread count tracking...');
+    
+    // Listen for unread count updates first
+    socketService.onUnreadCounts((counts) => {
+      console.log('📊 Received unread counts:', counts);
+      setUnreadCounts(counts);
+    });
+    
+    // Get initial unread counts with a small delay to ensure WebSocket is connected
+    setTimeout(() => {
+      console.log('📊 Requesting initial unread counts...');
+      socketService.getUnreadCounts();
+    }, 500);
+  };
 
   const setupOnlineStatusTracking = () => {
     // Listen for user status changes from socket
@@ -84,6 +101,19 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
           isOnline: data.userId === conv.user.id ? data.isOnline : conv.user.isOnline
         }
       })));
+    });
+
+    // Listen for new messages to update unread counts
+    socketService.onNewMessage((message) => {
+      const currentUserId = user?._id || user?.id;
+      
+      // Only increment unread count if message is not from current user and not in active conversation
+      if (message.senderId !== currentUserId && message.conversationId !== selectedConversationId) {
+        setUnreadCounts(prev => ({
+          ...prev,
+          [message.conversationId]: (prev[message.conversationId] || 0) + 1
+        }));
+      }
     });
 
     // Request current online users
@@ -119,9 +149,16 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
           ...conv.lastMessage,
           timestamp: new Date(conv.lastMessage.timestamp),
           isTranslated: false
-        } : undefined
+        } : null
       }));
+      
       setConversations(transformedData);
+      
+      // If no conversations exist, clear any stored conversation ID
+      if (transformedData.length === 0) {
+        localStorage.removeItem('selectedConversationId');
+        onSelectConversation(null);
+      }
     } catch (error) {
       console.error('Failed to load conversations:', error);
       // Show empty state for now
@@ -145,6 +182,15 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
     } catch (error) {
       console.error('Failed to update language:', error);
     }
+  };
+
+  const handleSelectConversation = (conversationId: string, conversation?: any) => {
+    // Clear unread count when conversation is selected
+    setUnreadCounts(prev => ({
+      ...prev,
+      [conversationId]: 0
+    }));
+    onSelectConversation(conversationId, conversation);
   };
 
   const handleNewChat = async () => {
@@ -374,15 +420,12 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
         {filteredConversations.map((conversation) => (
           <div
             key={conversation.id}
-            className={`p-4 border-b border-border cursor-pointer hover:bg-muted/50 transition-colors ${
-              selectedConversationId === conversation.id ? 'bg-muted' : ''
+            onClick={() => handleSelectConversation(conversation.id, conversation)}
+            className={`p-4 hover:bg-accent cursor-pointer border-b border-border/50 transition-colors ${
+              selectedConversationId === conversation.id ? 'bg-accent' : ''
             }`}
-            onClick={() => {
-              console.log('🔄 Conversation clicked:', conversation.id, conversation);
-              onSelectConversation(conversation.id, conversation);
-            }}
           >
-            <div className="flex items-start space-x-3">
+            <div className="flex items-center space-x-3">
               <div className="relative">
                 <Avatar className="h-12 w-12">
                   <AvatarImage src={conversation.user.avatar} />
@@ -406,14 +449,14 @@ const ChatSidebar: React.FC<ChatSidebarProps> = ({ selectedConversationId, onSel
                     </Badge>
                   </div>
                   <div className="flex items-center space-x-2">
+                    {unreadCounts[conversation.id] && unreadCounts[conversation.id] > 0 && (
+                      <Badge variant="destructive" className="text-xs min-w-[20px] h-5 rounded-full flex items-center justify-center">
+                        {unreadCounts[conversation.id]}
+                      </Badge>
+                    )}
                     <span className="text-xs text-muted-foreground">
                       {conversation.lastMessage?.timestamp ? formatTimestamp(conversation.lastMessage.timestamp) : 'Just now'}
                     </span>
-                    {conversation.unreadCount > 0 && (
-                      <Badge className="bg-primary text-primary-foreground text-xs min-w-[20px] h-5 flex items-center justify-center rounded-full">
-                        {conversation.unreadCount}
-                      </Badge>
-                    )}
                   </div>
                 </div>
                 
